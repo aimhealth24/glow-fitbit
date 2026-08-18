@@ -3,7 +3,7 @@ import re
 import json
 from functools import wraps
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -12,8 +12,11 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 from dotenv import load_dotenv
 load_dotenv()
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__, static_folder="templates")
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # ── Environment / config ───────────────────────────────────────────────────
 # Secrets must come from real environment variables — no hardcoded fallbacks.
