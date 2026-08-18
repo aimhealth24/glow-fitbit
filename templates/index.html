@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Health Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:        #f7f8fa;
+    --surface:   #ffffff;
+    --border:    #e4e7ec;
+    --border2:   #d0d5dd;
+    --text:      #101828;
+    --text2:     #344054;
+    --muted:     #667085;
+    --faint:     #98a2b3;
+    --blue:      #1570ef;
+    --blue-bg:   #eff4ff;
+    --red:       #d92d20;
+    --red-bg:    #fff1f0;
+    --green:     #039855;
+    --green-bg:  #ecfdf3;
+    --purple:    #6941c6;
+    --purple-bg: #f4f3ff;
+    --orange:    #dc6803;
+    --orange-bg: #fffaeb;
+    --radius:    8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Top bar ── */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .brand { display: flex; align-items: center; gap: 10px; }
+
+  .brand-icon {
+    width: 28px; height: 28px;
+    background: var(--blue);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-size: 14px;
+  }
+
+  .brand-name { font-weight: 600; font-size: 15px; color: var(--text); letter-spacing: -0.2px; }
+  .brand-name span { color: var(--muted); font-weight: 400; }
+
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+
+  .pill {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 500;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+  .pill.connected .pill-dot { background: var(--green); }
+  .pill.connected { background: var(--green-bg); color: var(--green); }
+  .pill.disconnected { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+
+  .btn {
+    padding: 7px 16px; border-radius: var(--radius);
+    font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: all 0.15s;
+    border: 1px solid var(--border2); background: var(--surface); color: var(--text2);
+  }
+  .btn:hover { background: var(--bg); }
+  .btn-primary { background: var(--blue); color: white; border-color: var(--blue); }
+  .btn-primary:hover { background: #1462d4; border-color: #1462d4; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ── App body: sidebar + main ── */
+  .app-body { display: flex; align-items: flex-start; }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    min-height: calc(100vh - 56px);
+    padding: 18px 0;
+    position: sticky;
+    top: 56px;
+  }
+
+  .sidebar-header {
+    padding: 0 18px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  .sidebar-list { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+
+  .sidebar-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: var(--radius);
+    cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text2);
+    transition: background 0.12s;
+  }
+  .sidebar-item:hover { background: var(--bg); }
+  .sidebar-item.active { background: var(--blue-bg); color: var(--blue); }
+
+  .sidebar-item .user-avatar {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; flex-shrink: 0;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .sidebar-item .item-label {
+    flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; min-width: 0;
+  }
+
+  .sidebar-item .item-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--border2); flex-shrink: 0;
+  }
+  .sidebar-item .item-dot.connected { background: var(--green); }
+
+  .sidebar-item .item-remove {
+    opacity: 0; width: 18px; height: 18px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; color: var(--faint); font-size: 15px; line-height: 1;
+    transition: opacity 0.12s;
+  }
+  .sidebar-item:hover .item-remove { opacity: 1; }
+  .sidebar-item .item-remove:hover { background: var(--red-bg); color: var(--red); }
+
+  .sidebar-empty {
+    padding: 10px 18px; font-size: 12px; color: var(--faint);
+  }
+
+  .sidebar-add {
+    margin: 10px 8px 0;
+    padding: 9px 12px;
+    border-radius: var(--radius);
+    border: 1px dashed var(--border2);
+    color: var(--muted);
+    font-size: 13px; font-weight: 500;
+    cursor: pointer; display: flex; align-items: center; gap: 8px;
+    transition: all 0.12s;
+  }
+  .sidebar-add:hover { background: var(--bg); color: var(--text2); border-color: var(--faint); }
+
+  .sidebar-add-form { margin: 10px 8px 0; display: none; gap: 6px; }
+  .sidebar-add-form input {
+    flex: 1; min-width: 0; border: 1px solid var(--border2); border-radius: var(--radius);
+    padding: 7px 10px; font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+  }
+  .sidebar-add-form input:focus { border-color: var(--blue); }
+  .sidebar-add-form button {
+    padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--blue);
+    background: var(--blue); color: white; font-size: 16px; cursor: pointer; flex-shrink: 0;
+  }
+  .sidebar-add-form .cancel-btn {
+    background: var(--surface); border-color: var(--border2); color: var(--muted); font-size: 13px;
+  }
+
+  /* ── Main layout ── */
+  .main { flex: 1; min-width: 0; max-width: 1080px; margin: 0 auto; padding: 28px 24px; }
+
+  /* ── Date bar ── */
+  .datebar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 24px; flex-wrap: wrap;
+  }
+
+  .datebar-label { font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+
+  .user-context-badge {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px;
+    background: var(--blue-bg);
+    border: 1px solid #bfdbfe;
+    border-radius: 20px;
+    font-size: 12px; font-weight: 500;
+    color: var(--blue);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  input[type="date"] {
+    border: 1px solid var(--border2); border-radius: var(--radius);
+    padding: 7px 12px; font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px; color: var(--text); background: var(--bg);
+    outline: none; transition: border-color 0.15s;
+  }
+  input[type="date"]:focus { border-color: var(--blue); }
+
+  .status-tag {
+    margin-left: auto; font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .status-tag.loading { color: var(--blue); }
+  .status-tag.error   { color: var(--red); }
+  .status-tag.ok      { color: var(--green); }
+
+  /* ── Connect prompt ── */
+  .connect-prompt {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .connect-prompt-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .connect-prompt-sub { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+
+  /* ── Section header ── */
+  .section { margin-bottom: 24px; }
+
+  .section-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 12px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-icon {
+    width: 28px; height: 28px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0;
+  }
+  .section-icon.activity { background: var(--blue-bg); }
+  .section-icon.heart    { background: var(--red-bg); }
+  .section-icon.sleep    { background: var(--purple-bg); }
+
+  .section-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: -0.1px; }
+  .section-sub { font-size: 11px; color: var(--muted); margin-left: auto; font-family: 'IBM Plex Mono', monospace; }
+
+  /* ── Cards grid ── */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 12px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; position: relative;
+  }
+
+  .card-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+
+  .card-symbol {
+    width: 32px; height: 32px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; flex-shrink: 0;
+  }
+  .card-symbol.blue   { background: var(--blue-bg); }
+  .card-symbol.red    { background: var(--red-bg); }
+  .card-symbol.green  { background: var(--green-bg); }
+  .card-symbol.purple { background: var(--purple-bg); }
+  .card-symbol.orange { background: var(--orange-bg); }
+
+  .card-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .card-value {
+    font-size: 28px; font-weight: 600; color: var(--text);
+    letter-spacing: -1px; line-height: 1; margin-bottom: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .card-value.na { font-size: 18px; color: var(--faint); font-weight: 400; letter-spacing: 0; }
+
+  .card-unit { font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
+  .card-sub { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
+
+  /* ── Sleep stages ── */
+  .sleep-stages { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; margin-top: 12px; }
+
+  .stages-title { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 16px; }
+
+  .stage-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .stage-row:last-child { margin-bottom: 0; }
+
+  .stage-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .stage-name { font-size: 12px; color: var(--text2); width: 44px; flex-shrink: 0; }
+  .stage-track { flex: 1; height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; border: 1px solid var(--border); }
+  .stage-fill { height: 100%; border-radius: 3px; transition: width 0.7s ease; }
+  .stage-time { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); width: 48px; text-align: right; flex-shrink: 0; }
+
+  .deep-fill  { background: #444ce7; }
+  .light-fill { background: #2e90fa; }
+  .rem-fill   { background: #7a5af8; }
+  .wake-fill  { background: #f79009; }
+  .deep-dot   { background: #444ce7; }
+  .light-dot  { background: #2e90fa; }
+  .rem-dot    { background: #7a5af8; }
+  .wake-dot   { background: #f79009; }
+
+  /* ── Dashboard visibility ── */
+  #dashboard { display: none; }
+  #dashboard.show { display: block; animation: fadein 0.3s ease; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── Empty state ── */
+  .empty { text-align: center; padding: 64px 24px; color: var(--muted); }
+  .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+  .empty-text { font-size: 14px; }
+  .empty-sub  { font-size: 12px; margin-top: 6px; color: var(--faint); }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+    </div>
+    <div class="brand-name">Health <span>Dashboard</span></div>
+  </div>
+  <div class="topbar-right">
+    <div class="pill disconnected" id="conn-pill">
+      <div class="pill-dot"></div>
+      <span id="conn-label">Not connected</span>
+    </div>
+    <button class="btn btn-primary" id="auth-btn" onclick="handleAuth()">Connect Account</button>
+  </div>
+</div>
+
+<div class="app-body">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">Users</div>
+    <div class="sidebar-list" id="sidebar-list">
+      <!-- Rendered by JS -->
+    </div>
+
+    <div class="sidebar-add" id="sidebar-add-btn" onclick="showAddForm()">
+      <span style="font-size:15px;line-height:1">+</span>
+      <span>Add user</span>
+    </div>
+    <div class="sidebar-add-form" id="sidebar-add-form">
+      <input type="text" id="new-user-input" placeholder="Name" maxlength="60"
+             onkeydown="if(event.key==='Enter'){submitAddUser();} if(event.key==='Escape'){hideAddForm();}"/>
+      <button class="cancel-btn" onclick="hideAddForm()">✕</button>
+      <button onclick="submitAddUser()">✓</button>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Date bar -->
+    <div class="datebar">
+      <span class="datebar-label">Date</span>
+      <input type="date" id="date-input"/>
+      <div class="user-context-badge" id="user-badge">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+        </svg>
+        <span id="user-badge-label">—</span>
+      </div>
+      <button class="btn btn-primary" id="fetch-btn" onclick="fetchData()" disabled>Fetch Data</button>
+      <div class="status-tag" id="status">—</div>
+    </div>
+
+    <!-- Connect prompt (shown when user not authenticated) -->
+    <div id="connect-prompt" class="connect-prompt" style="display:none">
+      <div class="connect-prompt-title" id="connect-prompt-title">Connect user</div>
+      <div class="connect-prompt-sub">This account hasn't been connected yet. Sign in with Google to link their health data.</div>
+      <button class="btn btn-primary" onclick="handleAuth()">Connect Account</button>
+
+      <div id="login-link-container" style="display:none; margin-top:16px;">
+        <div style="font-size:12px; color:#667085; margin-bottom:6px;">
+          Google Sign-in URL:
+        </div>
+
+        <a id="login-link"
+           href="#"
+           target="_blank"
+           style="
+             display:block;
+             word-break:break-all;
+             color:#1570ef;
+             font-size:12px;
+             font-family:'IBM Plex Mono', monospace;
+           ">
+        </a>
+      </div>
+
+    </div>
+
+    <!-- Empty state -->
+    <div id="empty-state">
+      <div class="empty">
+        <div class="empty-icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#d0d5dd" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        <div class="empty-text" id="empty-text">No data loaded</div>
+        <div class="empty-sub" id="empty-sub">Connect an account and select a date to view health metrics</div>
+      </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard">
+
+      <!-- Activity -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon activity">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1570ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <div class="section-title">Activity</div>
+          <div class="section-sub" id="date-label">—</div>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Steps</div></div>
+              <div class="card-symbol blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1570ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 5c0 1.657-1.343 3-3 3S13 6.657 13 5s1.343-3 3-3 3 1.343 3 3z"/>
+                  <path d="M9 17c0 1.657-1.343 3-3 3S3 18.657 3 17s1.343-3 3-3 3 1.343 3 3z"/>
+                  <path d="M13 5l-4 6 4 2-4 6"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-steps">—</div>
+            <div class="card-unit">steps</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Distance</div></div>
+              <div class="card-symbol blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1570ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="10" r="3"/>
+                  <path d="M12 2C8.134 2 5 5.134 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.866-3.134-7-7-7z"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-distance">—</div>
+            <div class="card-unit">miles</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Cardio Fitness</div></div>
+              <div class="card-symbol green">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#039855" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
+                  <line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-vo2max">—</div>
+            <div class="card-unit">mL/kg/min (VO₂ max)</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Swim Strokes</div></div>
+              <div class="card-symbol blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1570ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 12h20M2 17c2-2 4 0 6 0s4-2 6 0 4 2 6 0M8 7l4-4 4 4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-swim">—</div>
+            <div class="card-unit">total strokes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Heart & Vitals -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon heart">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d92d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+          </div>
+          <div class="section-title">Heart &amp; Vitals</div>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Heart Rate</div></div>
+              <div class="card-symbol red">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d92d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-hr">—</div>
+            <div class="card-unit">bpm average</div>
+            <div class="card-sub" id="v-hr-range">min — / max —</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Resting HR</div></div>
+              <div class="card-symbol red">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d92d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-rhr">—</div>
+            <div class="card-unit">bpm</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">HRV</div></div>
+              <div class="card-symbol orange">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc6803" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 12h4l3-9 4 18 3-9h4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-hrv">—</div>
+            <div class="card-unit">ms RMSSD</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Breathing Rate</div></div>
+              <div class="card-symbol blue">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1570ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7z"/>
+                  <circle cx="12" cy="9" r="2.5"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-br">—</div>
+            <div class="card-unit">breaths/min</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">SpO₂</div></div>
+              <div class="card-symbol red">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d92d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="4"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-spo2">—</div>
+            <div class="card-unit">% blood oxygen</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Skin Temp Var.</div></div>
+              <div class="card-symbol orange">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc6803" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-temp">—</div>
+            <div class="card-unit">°C from baseline</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sleep -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon sleep">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6941c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+          </div>
+          <div class="section-title">Sleep</div>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Time in Bed</div></div>
+              <div class="card-symbol purple">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6941c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                  <polyline points="9 22 9 12 15 12 15 22"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-inbed">—</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Time Asleep</div></div>
+              <div class="card-symbol purple">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6941c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-asleep">—</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Time Awake</div></div>
+              <div class="card-symbol orange">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc6803" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="5"/>
+                  <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                  <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-awake">—</div>
+          </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Sleep Score</div></div>
+              <div class="card-symbol purple">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6941c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="sleep-score">N/A</div>
+            <div class="card-unit" id="sleep-score-category">N/A</div>
+          </div>
+        </div>
+        <div class="sleep-stages">
+          <div class="stages-title">Sleep Stages</div>
+          <div class="stage-row">
+            <div class="stage-dot deep-dot"></div>
+            <div class="stage-name">Deep</div>
+            <div class="stage-track"><div class="stage-fill deep-fill" id="bar-deep" style="width:0%"></div></div>
+            <div class="stage-time" id="mins-deep">—</div>
+          </div>
+          <div class="stage-row">
+            <div class="stage-dot light-dot"></div>
+            <div class="stage-name">Light</div>
+            <div class="stage-track"><div class="stage-fill light-fill" id="bar-light" style="width:0%"></div></div>
+            <div class="stage-time" id="mins-light">—</div>
+          </div>
+          <div class="stage-row">
+            <div class="stage-dot rem-dot"></div>
+            <div class="stage-name">REM</div>
+            <div class="stage-track"><div class="stage-fill rem-fill" id="bar-rem" style="width:0%"></div></div>
+            <div class="stage-time" id="mins-rem">—</div>
+          </div>
+          <div class="stage-row">
+            <div class="stage-dot wake-dot"></div>
+            <div class="stage-name">Awake</div>
+            <div class="stage-track"><div class="stage-fill wake-fill" id="bar-awake" style="width:0%"></div></div>
+            <div class="stage-time" id="mins-awake">—</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /dashboard -->
+  </div><!-- /main -->
+</div><!-- /app-body -->
+
+<script>
+  // Injected server-side from the API_KEY environment variable at render
+  // time (see the /  route in app.py) — never hardcode the real key here.
+  const API_KEY = "{{ api_key }}";
+
+  // ── Avatar color palette (assigned by list position, cycles for many users) ──
+  const PALETTE = [
+    ["#dbeafe", "#1d4ed8"], ["#fce7f3", "#9d174d"], ["#d1fae5", "#065f46"],
+    ["#ede9fe", "#5b21b6"], ["#fef3c7", "#92400e"], ["#e0f2fe", "#075985"],
+    ["#fee2e2", "#991b1b"], ["#ecfccb", "#3f6212"],
+  ];
+  const ACTIVE_PALETTE = [
+    ["#1570ef", "#fff"], ["#ec4899", "#fff"], ["#039855", "#fff"],
+    ["#6941c6", "#fff"], ["#d97706", "#fff"], ["#0284c7", "#fff"],
+    ["#dc2626", "#fff"], ["#4d7c0f", "#fff"],
+  ];
+
+  let USERS = [];        // [{id, label, initials, authenticated}]
+  let activeUser = null;
+
+  // ── Default date = yesterday ───────────────────────────────────────────────
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  document.getElementById("date-input").value = d.toISOString().split("T")[0];
+
+  function escapeHtml(s) {
+    const el = document.createElement("div");
+    el.textContent = s;
+    return el.innerHTML;
+  }
+
+  function fmt(val, dec = 0) {
+    if (val === null || val === undefined) return "N/A";
+    return dec > 0 ? parseFloat(val).toFixed(dec) : Math.round(val).toLocaleString();
+  }
+
+  function fmtMins(m) {
+    if (m === null || m === undefined) return "N/A";
+    const h = Math.floor(m / 60), min = m % 60;
+    return h > 0 ? `${h}h ${min}m` : `${min}m`;
+  }
+
+  function setStatus(msg, cls = "") {
+    const el = document.getElementById("status");
+    el.textContent = msg;
+    el.className = "status-tag " + cls;
+  }
+
+  // ── User list ───────────────────────────────────────────────────────────────
+  async function loadUsers({ preserveActive = true } = {}) {
+    try {
+      const r = await fetch("/api/users");
+      USERS = await r.json();
+    } catch (e) {
+      setStatus("Could not load users", "error");
+      return;
+    }
+
+    if (!USERS.length) {
+      activeUser = null;
+    } else if (!preserveActive || !activeUser || !USERS.find(u => u.id === activeUser)) {
+      activeUser = USERS[0].id;
+    }
+
+    renderSidebar();
+    applyActiveUserUI();
+  }
+
+  function renderSidebar() {
+    const list = document.getElementById("sidebar-list");
+    list.innerHTML = "";
+
+    if (!USERS.length) {
+      const empty = document.createElement("div");
+      empty.className = "sidebar-empty";
+      empty.textContent = "No users yet — add one below";
+      list.appendChild(empty);
+      return;
+    }
+
+    USERS.forEach((u, i) => {
+      const isActive = u.id === activeUser;
+      const [bg, fg]   = PALETTE[i % PALETTE.length];
+      const [abg, afg] = ACTIVE_PALETTE[i % ACTIVE_PALETTE.length];
+
+      const item = document.createElement("div");
+      item.className = "sidebar-item" + (isActive ? " active" : "");
+      item.innerHTML = `
+        <div class="user-avatar" style="background:${isActive ? abg : bg};color:${isActive ? afg : fg}">${escapeHtml(u.initials)}</div>
+        <span class="item-label">${escapeHtml(u.label)}</span>
+        <div class="item-dot${u.authenticated ? " connected" : ""}"></div>
+        <div class="item-remove" title="Remove user">&times;</div>
+      `;
+      item.addEventListener("click", (e) => {
+        if (e.target.closest(".item-remove")) return;
+        switchUser(u.id);
+      });
+      item.querySelector(".item-remove").addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeUser(u.id, u.label);
+      });
+      list.appendChild(item);
+    });
+  }
+
+  function switchUser(userId) {
+    activeUser = userId;
+    renderSidebar();
+    applyActiveUserUI();
+  }
+
+  function applyActiveUserUI() {
+    document.getElementById("dashboard").className = "";
+    document.getElementById("connect-prompt").style.display = "none";
+    setStatus("—");
+
+    const user = USERS.find(u => u.id === activeUser);
+    const pill      = document.getElementById("conn-pill");
+    const connLabel = document.getElementById("conn-label");
+    const authBtn   = document.getElementById("auth-btn");
+    const fetchBtn  = document.getElementById("fetch-btn");
+
+    if (!user) {
+      document.getElementById("empty-state").style.display = "";
+      document.getElementById("empty-text").textContent = "No users yet";
+      document.getElementById("empty-sub").textContent = "Add a user from the sidebar to get started";
+      document.getElementById("user-badge-label").textContent = "—";
+      pill.className = "pill disconnected";
+      connLabel.textContent = "No user selected";
+      authBtn.disabled = true;
+      fetchBtn.disabled = true;
+      return;
+    }
+
+    document.getElementById("user-badge-label").textContent = user.label;
+
+    if (user.authenticated) {
+      pill.className = "pill connected";
+      connLabel.textContent = "Connected";
+      authBtn.textContent = "Connected ✓";
+      authBtn.disabled = true;
+      fetchBtn.disabled = false;
+      document.getElementById("connect-prompt").style.display = "none";
+      document.getElementById("empty-state").style.display = "";
+      document.getElementById("empty-text").textContent = "No data loaded";
+      document.getElementById("empty-sub").textContent = "Select a date to view health metrics";
+      setStatus("Ready to fetch", "ok");
+    } else {
+      pill.className = "pill disconnected";
+      connLabel.textContent = "Not connected";
+      authBtn.textContent = "Connect Account";
+      authBtn.disabled = false;
+      fetchBtn.disabled = true;
+      document.getElementById("connect-prompt").style.display = "block";
+      document.getElementById("connect-prompt-title").textContent = `Connect ${user.label}`;
+      document.getElementById("empty-state").style.display = "none";
+      setStatus("Not connected", "error");
+    }
+  }
+
+  // ── Add / remove users ─────────────────────────────────────────────────────
+  function showAddForm() {
+    document.getElementById("sidebar-add-btn").style.display = "none";
+    const form = document.getElementById("sidebar-add-form");
+    form.style.display = "flex";
+    const input = document.getElementById("new-user-input");
+    input.value = "";
+    input.focus();
+  }
+
+  function hideAddForm() {
+    document.getElementById("sidebar-add-btn").style.display = "flex";
+    document.getElementById("sidebar-add-form").style.display = "none";
+  }
+
+  async function submitAddUser() {
+    const input = document.getElementById("new-user-input");
+    const label = input.value.trim();
+    if (!label) { input.focus(); return; }
+
+    try {
+      const r = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setStatus(data.error || "Could not add user", "error"); return; }
+
+      hideAddForm();
+      activeUser = data.id;
+      await loadUsers({ preserveActive: true });
+    } catch (e) {
+      setStatus("Network error adding user", "error");
+    }
+  }
+
+  async function removeUser(userId, label) {
+    if (!confirm(`Remove ${label}? Their stored connection will be deleted too.`)) return;
+    try {
+      await fetch(`/api/users/${userId}`, { method: "DELETE" });
+      if (activeUser === userId) activeUser = null;
+      await loadUsers({ preserveActive: true });
+    } catch (e) {
+      setStatus("Network error removing user", "error");
+    }
+  }
+
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  async function handleAuth() {
+    if (!activeUser) return;
+    setStatus("Starting authentication...", "loading");
+    try {
+      const r = await fetch(`/api/auth/start?user=${activeUser}`);
+      const data = await r.json();
+      if (!r.ok) { setStatus(data.error || "Error starting auth", "error"); return; }
+      if (data.status === "already_authenticated") {
+        await loadUsers({ preserveActive: true });
+        return;
+      }
+      if (data.auth_url) {
+        const link = document.getElementById("login-link");
+        const container = document.getElementById("login-link-container");
+
+        link.href = data.auth_url;
+        link.textContent = data.auth_url;
+        container.style.display = "block";
+
+        // Optional: still open automatically
+        window.open(data.auth_url, "_blank", "width=480,height=620");
+        setStatus("Waiting for sign-in...", "loading");
+        const targetUser = activeUser;
+        const poll = setInterval(async () => {
+          await loadUsers({ preserveActive: true });
+          const u = USERS.find(x => x.id === targetUser);
+          if (u && u.authenticated) clearInterval(poll);
+        }, 2000);
+      }
+    } catch (e) { setStatus("Error starting auth", "error"); }
+  }
+
+  // ── Fetch data ──────────────────────────────────────────────────────────────
+  async function fetchData() {
+    if (!activeUser) { setStatus("Select a user first", "error"); return; }
+    const date = document.getElementById("date-input").value;
+    if (!date) { setStatus("Select a date first", "error"); return; }
+    document.getElementById("fetch-btn").disabled = true;
+    setStatus("Fetching...", "loading");
+    try {
+      const r = await fetch(`/api/health?date=${date}&user=${activeUser}`, {
+        headers: { "X-API-Key": API_KEY }
+      });
+      const data = await r.json();
+      if (!r.ok) { setStatus(data.error || "Error", "error"); return; }
+      render(data, date);
+      setStatus(`Loaded ${date}`, "ok");
+    } catch (e) {
+      setStatus("Network error", "error");
+    } finally {
+      document.getElementById("fetch-btn").disabled = false;
+    }
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  function set(id, val) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (val === null || val === undefined) {
+      el.textContent = "N/A";
+      el.className = "card-value na";
+    } else {
+      el.textContent = val;
+      el.className = "card-value";
+    }
+  }
+
+  function render(d, date) {
+    document.getElementById("date-label").textContent = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+
+    set("v-steps",    d.steps != null ? fmt(d.steps) : null);
+    set("v-distance", d.distance_miles != null ? fmt(d.distance_miles, 2) : null);
+    set("v-vo2max",   d.vo2max != null ? fmt(d.vo2max, 1) : null);
+    set("v-swim",     d.swim_strokes != null ? fmt(d.swim_strokes) : null);
+
+    set("v-hr",  d.hr_avg ? fmt(d.hr_avg) : null);
+    document.getElementById("v-hr-range").textContent = d.hr_min && d.hr_max ? `min ${fmt(d.hr_min)} / max ${fmt(d.hr_max)} bpm` : "";
+    set("v-rhr",  d.resting_hr ? fmt(d.resting_hr) : null);
+    set("v-hrv",  d.hrv ? fmt(d.hrv, 1) : null);
+    set("v-br",   d.breathing_rate ? fmt(d.breathing_rate, 1) : null);
+    set("v-spo2", d.spo2 ? fmt(d.spo2, 1) : null);
+    set("v-temp", d.skin_temp != null ? fmt(d.skin_temp, 1) : null);
+
+    const sl = d.sleep || {};
+    set("sleep-score", sl.sleep_score != null ? fmt(sl.sleep_score.score) : null);
+    set("sleep-score-category", sl.sleep_score != null ? sl.sleep_score.category : null);
+    set("v-inbed",  sl.minutes_in_bed ? fmtMins(sl.minutes_in_bed) : null);
+    set("v-asleep", sl.minutes_asleep ? fmtMins(sl.minutes_asleep) : null);
+    set("v-awake",  sl.minutes_awake  ? fmtMins(sl.minutes_awake)  : null);
+
+    const st = sl.stages || {};
+    const total = (st.DEEP || 0) + (st.LIGHT || 0) + (st.REM || 0) + (st.AWAKE || 0);
+    const pct = v => total > 0 ? ((v / total) * 100).toFixed(1) + "%" : "0%";
+
+    document.getElementById("bar-deep").style.width  = pct(st.DEEP  || 0);
+    document.getElementById("bar-light").style.width = pct(st.LIGHT || 0);
+    document.getElementById("bar-rem").style.width   = pct(st.REM   || 0);
+    document.getElementById("bar-awake").style.width = pct(st.AWAKE || 0);
+
+    document.getElementById("mins-deep").textContent  = fmtMins(st.DEEP  || 0);
+    document.getElementById("mins-light").textContent = fmtMins(st.LIGHT || 0);
+    document.getElementById("mins-rem").textContent   = fmtMins(st.REM   || 0);
+    document.getElementById("mins-awake").textContent = fmtMins(st.AWAKE || 0);
+
+    document.getElementById("empty-state").style.display = "none";
+    document.getElementById("connect-prompt").style.display = "none";
+    document.getElementById("dashboard").className = "show";
+  }
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  loadUsers({ preserveActive: false });
+</script>
+</body>
+</html>
