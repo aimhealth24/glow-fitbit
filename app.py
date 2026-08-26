@@ -13,6 +13,7 @@ from pymongo.errors import PyMongoError
 from dotenv import load_dotenv
 load_dotenv()
 from werkzeug.middleware.proxy_fix import ProxyFix
+import snowflake.connector
 
 app = Flask(__name__, static_folder="templates")
 
@@ -60,6 +61,41 @@ users_collection       = _mongo_db["users"]
 tokens_collection      = _mongo_db["tokens"]
 oauth_state_collection = _mongo_db["oauth_state"]
 
+# ── Snowflake setup ───────────────────────────────────────────────────────
+
+SNOWFLAKE_ACCOUNT = os.environ.get("SNOWFLAKE_ACCOUNT")
+SNOWFLAKE_USER = os.environ.get("SNOWFLAKE_USER")
+SNOWFLAKE_PASSWORD = os.environ.get("SNOWFLAKE_PASSWORD")
+SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE")
+SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
+SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA", "COMMON")
+
+_required_snowflake = {
+    "SNOWFLAKE_ACCOUNT": SNOWFLAKE_ACCOUNT,
+    "SNOWFLAKE_USER": SNOWFLAKE_USER,
+    "SNOWFLAKE_PASSWORD": SNOWFLAKE_PASSWORD,
+    "SNOWFLAKE_WAREHOUSE": SNOWFLAKE_WAREHOUSE,
+    "SNOWFLAKE_DATABASE": SNOWFLAKE_DATABASE,
+}
+
+missing = [name for name, value in _required_snowflake.items() if not value]
+
+if missing:
+    raise RuntimeError(
+        f"Missing Snowflake environment variables: {', '.join(missing)}"
+    )
+
+
+def get_snowflake_connection():
+    return snowflake.connector.connect(
+        account=SNOWFLAKE_ACCOUNT,
+        user=SNOWFLAKE_USER,
+        password=SNOWFLAKE_PASSWORD,
+        warehouse=SNOWFLAKE_WAREHOUSE,
+        database=SNOWFLAKE_DATABASE,
+        schema=SNOWFLAKE_SCHEMA,
+    )
+
 
 def _ensure_mongo_indexes():
     try:
@@ -78,24 +114,65 @@ def _ensure_mongo_indexes():
 _ensure_mongo_indexes()
 
 
-def save_health_data(user_id, date, data):
-    """Upsert one day's fetched health data for a user. Returns True on success."""
-    doc = {
-        "user_id": user_id,
-        "date": date,
-        "data": data,
-        "fetched_at": datetime.utcnow(),
-    }
+def save_health_data(user_id, data_date, data):
+    """Upsert one day's health data into Snowflake."""
+
+    conn = None
+    cursor = None
+
     try:
-        health_collection.update_one(
-            {"user_id": user_id, "date": date},
-            {"$set": doc},
-            upsert=True,
+        conn = get_snowflake_connection()
+        cursor = conn.cursor()
+
+        sql = """
+            MERGE INTO common.fitbit_data AS target
+            USING (
+                SELECT
+                    %s AS user_id,
+                    %s AS date,
+                    %s AS fetched_at,
+                    PARSE_JSON(%s) AS data
+            ) AS source
+            ON target.user_id = source.user_id
+               AND target.data_date = source.data_date
+
+            WHEN MATCHED THEN UPDATE SET
+                target.fetched_at = source.fetched_at,
+                target.data = source.data
+
+            WHEN NOT MATCHED THEN INSERT
+                (user_id, date, fetched_at, data)
+            VALUES
+                (source.user_id, source.date, source.fetched_at, source.data)
+        """
+
+        cursor.execute(
+            sql,
+            (
+                user_id,
+                data_date,
+                datetime.utcnow(),
+                json.dumps(data),
+            ),
         )
+
+        conn.commit()
+
+        print(f"[snowflake] Saved health data for {user_id} on {data_date}")
         return True
-    except PyMongoError as e:
-        print(f"[mongo] Failed to save health data for {user_id} on {date}: {e}")
+
+    except Exception as e:
+        print(
+            f"[snowflake] Failed to save health data "
+            f"for {user_id} on {data_date}: {e}"
+        )
         return False
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 SCOPES = [
