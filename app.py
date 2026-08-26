@@ -3,7 +3,7 @@ import re
 import json
 from functools import wraps
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for
 from flask_cors import CORS
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -32,12 +32,15 @@ if not MONGODB_URI:
 MONGODB_DB_NAME     = os.environ.get("MONGODB_DB", "aim_health")
 MONGODB_COLLECTION  = os.environ.get("MONGODB_COLLECTION", "health_data")
 
-API_KEY = os.environ.get("API_KEY")  # required for machine-to-machine calls to /api/health
+API_KEY = os.environ.get("API_KEY")
 
-# Comma-separated list of origins allowed to call this API cross-origin from
-# a browser, e.g. "https://dashboard.example.com,https://admin.example.com".
-# Empty by default -> no cross-origin browser access (same-origin dashboard
-# still works fine since Flask serves it directly).
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required (used to sign login sessions)")
+app.secret_key = SECRET_KEY
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD")  # checked at login time, not required at startup
+
 _allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 CORS(app, origins=_allowed_origins if _allowed_origins else [])
 
@@ -168,6 +171,18 @@ def get_credentials(user="user1"):
 
 def get_headers(creds):
     return {"Authorization": f"Bearer {creds.token}", "Accept": "application/json"}
+
+
+def login_required(f):
+    """Gates the dashboard UI and admin endpoints behind the shared site
+    password. Separate from require_api_key, which protects the
+    machine-to-machine /api/health endpoint instead."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("authenticated"):
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return decorated
 
 
 def require_api_key(f):
@@ -391,7 +406,31 @@ def calculate_sleep_score(summary: dict) -> dict:
 
 # ── User management endpoints ─────────────────────────────────────────────────
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not SITE_PASSWORD:
+        return "Server misconfigured: SITE_PASSWORD is not set", 500
+    error = None
+    if request.method == "POST":
+        if request.form.get("password", "") == SITE_PASSWORD:
+            session.clear()
+            session["authenticated"] = True
+            session.permanent = True
+            next_path = request.args.get("next")
+            # Only follow same-site relative paths, never an external URL.
+            if next_path and next_path.startswith("/"):
+                return redirect(next_path)
+            return redirect(url_for("index"))
+        error = "Incorrect password"
+    return render_template("login.html", error=error)
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
 @app.route("/api/users", methods=["GET"])
+@login_required
 def list_users():
     users = load_users()
     out = []
@@ -407,6 +446,7 @@ def list_users():
 
 
 @app.route("/api/users", methods=["POST"])
+@login_required
 def add_user():
     data = request.get_json(silent=True) or {}
     label = (data.get("label") or "").strip()
@@ -437,6 +477,7 @@ def add_user():
 
 
 @app.route("/api/users/<user_id>", methods=["DELETE"])
+@login_required
 def delete_user(user_id):
     users = load_users()
     u = find_user(users, user_id)
@@ -469,6 +510,7 @@ def _load_google_oauth_config():
 
 
 @app.route("/api/auth/start")
+@login_required
 def auth_start():
     user = request.args.get("user", "user1")
     users = load_users()
@@ -548,6 +590,7 @@ def callback():
 
 
 @app.route("/api/auth/status")
+@login_required
 def auth_status():
     user = request.args.get("user", "user1")
     creds = get_credentials(user)
@@ -601,6 +644,7 @@ def health_check():
 # ── Serve frontend ────────────────────────────────────────────────────────────
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html", api_key=API_KEY or "")
 
