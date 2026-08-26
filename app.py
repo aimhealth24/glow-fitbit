@@ -68,7 +68,7 @@ SNOWFLAKE_USER = os.environ.get("SNOWFLAKE_USER")
 SNOWFLAKE_PASSWORD = os.environ.get("SNOWFLAKE_PASSWORD")
 SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE")
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
-SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA", "COMMON")
+SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
 
 _required_snowflake = {
     "SNOWFLAKE_ACCOUNT": SNOWFLAKE_ACCOUNT,
@@ -76,6 +76,7 @@ _required_snowflake = {
     "SNOWFLAKE_PASSWORD": SNOWFLAKE_PASSWORD,
     "SNOWFLAKE_WAREHOUSE": SNOWFLAKE_WAREHOUSE,
     "SNOWFLAKE_DATABASE": SNOWFLAKE_DATABASE,
+    "SNOWFLAKE_SCHEMA": SNOWFLAKE_SCHEMA,
 }
 
 missing = [name for name, value in _required_snowflake.items() if not value]
@@ -125,7 +126,7 @@ def save_health_data(user_id, data_date, data):
         cursor = conn.cursor()
 
         sql = """
-            MERGE INTO common.fitbit_data AS target
+            MERGE INTO fitbit_data AS target
             USING (
                 SELECT
                     %s AS user_id,
