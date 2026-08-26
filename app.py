@@ -135,7 +135,7 @@ def save_health_data(user_id, data_date, data):
                     PARSE_JSON(%s) AS data
             ) AS source
             ON target.user_id = source.user_id
-               AND target.data_date = source.data_date
+               AND target.date = source.date
 
             WHEN MATCHED THEN UPDATE SET
                 target.fetched_at = source.fetched_at,
