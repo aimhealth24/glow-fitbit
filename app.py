@@ -1,22 +1,31 @@
 import os
-import re
+import uuid
 import json
 from functools import wraps
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 import requests
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
+
+# Loads variables from a local .env file if one exists (for local dev only).
+# In Railway, real environment variables are already set on the platform, so
+# this is a no-op there — .env is git-ignored and never deployed.
 from dotenv import load_dotenv
 load_dotenv()
-from werkzeug.middleware.proxy_fix import ProxyFix
-import snowflake.connector
 
-app = Flask(__name__, static_folder="templates")
+app = Flask(__name__, static_folder="static")
 
+# Railway (and most PaaS) terminate TLS at an edge proxy, so requests reach
+# this app over plain HTTP internally with X-Forwarded-Proto: https set.
+# Without ProxyFix, request.host_url reports "http://" even in production,
+# which breaks the OAuth redirect_uri built in _redirect_uri() below.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # ── Environment / config ───────────────────────────────────────────────────
@@ -26,22 +35,26 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "production")
 
-MONGODB_URI = os.environ.get("MONGODB_URI")
-if not MONGODB_URI:
-    raise RuntimeError("MONGODB_URI environment variable is required")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 
-MONGODB_DB_NAME     = os.environ.get("MONGODB_DB", "aim_health")
-MONGODB_COLLECTION  = os.environ.get("MONGODB_COLLECTION", "health_data")
+API_KEY = os.environ.get("API_KEY")  # required for machine-to-machine calls to /api/health
 
-API_KEY = os.environ.get("API_KEY")
-
+# Dashboard login — a single shared password gates the UI itself, separate
+# from API_KEY which is only for the /api/health machine-to-machine call.
 SECRET_KEY = os.environ.get("SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is required (used to sign login sessions)")
 app.secret_key = SECRET_KEY
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
+
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD")  # checked at login time, not required at startup
 
+# Comma-separated list of origins allowed to call this API cross-origin from
+# a browser, e.g. "https://dashboard.example.com,https://admin.example.com".
+# Empty by default -> no cross-origin browser access (same-origin dashboard
+# still works fine since Flask serves it directly).
 _allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 CORS(app, origins=_allowed_origins if _allowed_origins else [])
 
@@ -51,148 +64,97 @@ if ENVIRONMENT != "production":
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
-# ── Mongo setup ───────────────────────────────────────────────────────────
-
-_mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
-_mongo_db = _mongo_client[MONGODB_DB_NAME]
-
-health_collection      = _mongo_db[MONGODB_COLLECTION]
-users_collection       = _mongo_db["users"]
-tokens_collection      = _mongo_db["tokens"]
-oauth_state_collection = _mongo_db["oauth_state"]
-
-# ── Snowflake setup ───────────────────────────────────────────────────────
-
-SNOWFLAKE_ACCOUNT = os.environ.get("SNOWFLAKE_ACCOUNT")
-SNOWFLAKE_USER = os.environ.get("SNOWFLAKE_USER")
-SNOWFLAKE_PASSWORD = os.environ.get("SNOWFLAKE_PASSWORD")
-SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE")
-SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
-SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
-
-_required_snowflake = {
-    "SNOWFLAKE_ACCOUNT": SNOWFLAKE_ACCOUNT,
-    "SNOWFLAKE_USER": SNOWFLAKE_USER,
-    "SNOWFLAKE_PASSWORD": SNOWFLAKE_PASSWORD,
-    "SNOWFLAKE_WAREHOUSE": SNOWFLAKE_WAREHOUSE,
-    "SNOWFLAKE_DATABASE": SNOWFLAKE_DATABASE,
-    "SNOWFLAKE_SCHEMA": SNOWFLAKE_SCHEMA,
-}
-
-missing = [name for name, value in _required_snowflake.items() if not value]
-
-if missing:
-    raise RuntimeError(
-        f"Missing Snowflake environment variables: {', '.join(missing)}"
-    )
+# ── Postgres setup ──────────────────────────────────────────────────────────
+# One pool per worker process (gunicorn spawns several); psycopg_pool handles
+# checking connections out/in and reconnecting if the server drops one.
+# Schema (tables, indexes, partitions) lives in schema.sql — run once against
+# the database before first deploy. This module only ever reads/writes rows.
+_db_pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=5, kwargs={"row_factory": dict_row})
 
 
-def get_snowflake_connection():
-    return snowflake.connector.connect(
-        account=SNOWFLAKE_ACCOUNT,
-        user=SNOWFLAKE_USER,
-        password=SNOWFLAKE_PASSWORD,
-        warehouse=SNOWFLAKE_WAREHOUSE,
-        database=SNOWFLAKE_DATABASE,
-        schema=SNOWFLAKE_SCHEMA,
-    )
+def db():
+    """Context manager yielding a pooled connection. Use as:
+    with db() as conn, conn.cursor() as cur: ..."""
+    return _db_pool.connection()
 
 
-def _ensure_mongo_indexes():
-    try:
-        # One document per (user, date) — re-fetching a date updates it
-        # instead of creating a duplicate.
-        health_collection.create_index([("user_id", 1), ("date", 1)], unique=True)
-        users_collection.create_index("id", unique=True)
-        tokens_collection.create_index("user_id", unique=True)
-        oauth_state_collection.create_index("state", unique=True)
-        # Abandoned OAuth flows expire automatically after 10 minutes.
-        oauth_state_collection.create_index("created_at", expireAfterSeconds=600)
-    except PyMongoError as e:
-        print(f"[mongo] Could not create index (will still try to write later): {e}")
+def save_health_data(user_id, date, data, timezone="America/Chicago"):
+    """Save health data for the requested date.
 
+    Period:
+        Start: YYYY-MM-DD 00:00:00
+        End:   YYYY-MM-DD 11:59:59
+    """
 
-_ensure_mongo_indexes()
-
-
-def save_health_data(user_id, data_date, data):
-    """Upsert one day's health data into Snowflake."""
-
-    conn = None
-    cursor = None
+    from zoneinfo import ZoneInfo
 
     try:
-        conn = get_snowflake_connection()
-        cursor = conn.cursor()
+        tz = ZoneInfo(timezone)
 
-        sql = """
-            MERGE INTO fitbit_data AS target
-            USING (
-                SELECT
-                    %s AS user_id,
-                    %s AS date,
-                    %s AS fetched_at,
-                    PARSE_JSON(%s) AS data
-            ) AS source
-            ON target.user_id = source.user_id
-               AND target.date = source.date
-
-            WHEN MATCHED THEN UPDATE SET
-                target.fetched_at = source.fetched_at,
-                target.data = source.data
-
-            WHEN NOT MATCHED THEN INSERT
-                (user_id, date, fetched_at, data)
-            VALUES
-                (source.user_id, source.date, source.fetched_at, source.data)
-        """
-
-        cursor.execute(
-            sql,
-            (
-                user_id,
-                data_date,
-                datetime.utcnow(),
-                json.dumps(data),
-            ),
+        period_start = datetime.strptime(
+            date, "%Y-%m-%d"
+        ).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+            tzinfo=tz,
         )
 
-        conn.commit()
+        period_end = period_start.replace(
+            hour=11,
+            minute=59,
+            second=59,
+            microsecond=0,
+        )
 
-        print(f"[snowflake] Saved health data for {user_id} on {data_date}")
+        with db() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO health_snapshots (
+                    user_id,
+                    period_start,
+                    period_end,
+                    data,
+                    fetched_at
+                )
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (user_id, period_start, period_end)
+                DO UPDATE SET
+                    data = EXCLUDED.data,
+                    fetched_at = now()
+                """,
+                (
+                    user_id,
+                    period_start,
+                    period_end,
+                    Jsonb(data),
+                ),
+            )
+
         return True
 
-    except Exception as e:
+    except psycopg.Error as e:
         print(
-            f"[snowflake] Failed to save health data "
-            f"for {user_id} on {data_date}: {e}"
+            f"[db] Failed to save health data "
+            f"for {user_id} on {date}: {e}"
         )
         return False
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 SCOPES = [
     "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
     "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
     "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
 ]
 BASE_URL = "https://health.googleapis.com/v4/users/me"
+USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
-# ── User registry (Mongo-backed) ────────────────────────────────────────────
-# Users used to live in users.json on local disk. On Railway the filesystem
-# is ephemeral, so every redeploy would wipe the registry and every stored
-# OAuth token with it. Both now live in Mongo, which already backs the rest
-# of this app.
-
-def slugify(text):
-    s = re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
-    return s or "user"
-
+# ── User registry (Postgres-backed) ─────────────────────────────────────────
+# Users, tokens, and in-flight OAuth state all live in Postgres now — see
+# schema.sql. Nothing here depends on local disk, so it survives redeploys.
 
 def make_initials(label):
     parts = [p for p in label.strip().split() if p]
@@ -204,7 +166,9 @@ def make_initials(label):
 
 
 def load_users():
-    return list(users_collection.find({}, {"_id": 0}))
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, label, initials FROM users ORDER BY created_at")
+        return cur.fetchall()
 
 
 def find_user(users, user_id):
@@ -214,20 +178,27 @@ def find_user(users, user_id):
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def get_stored_token(user_id):
-    doc = tokens_collection.find_one({"user_id": user_id})
-    return doc["token"] if doc else None
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT token FROM tokens WHERE user_id = %s", (user_id,))
+        row = cur.fetchone()
+        return row["token"] if row else None
 
 
 def save_stored_token(user_id, creds):
-    tokens_collection.update_one(
-        {"user_id": user_id},
-        {"$set": {"user_id": user_id, "token": json.loads(creds.to_json()), "updated_at": datetime.utcnow()}},
-        upsert=True,
-    )
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tokens (user_id, token, updated_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (user_id) DO UPDATE SET token = EXCLUDED.token, updated_at = now()
+            """,
+            (user_id, Jsonb(json.loads(creds.to_json()))),
+        )
 
 
 def delete_stored_token(user_id):
-    tokens_collection.delete_one({"user_id": user_id})
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM tokens WHERE user_id = %s", (user_id,))
 
 
 def get_credentials(user="user1"):
@@ -488,6 +459,7 @@ def calculate_sleep_score(summary: dict) -> dict:
 def login():
     if not SITE_PASSWORD:
         return "Server misconfigured: SITE_PASSWORD is not set", 500
+
     error = None
     if request.method == "POST":
         if request.form.get("password", "") == SITE_PASSWORD:
@@ -500,12 +472,15 @@ def login():
                 return redirect(next_path)
             return redirect(url_for("index"))
         error = "Incorrect password"
+
     return render_template("login.html", error=error)
+
 
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
 
 @app.route("/api/users", methods=["GET"])
 @login_required
@@ -533,22 +508,18 @@ def add_user():
     if len(label) > 60:
         return jsonify({"error": "Name is too long"}), 400
 
-    existing_ids = {u["id"] for u in load_users()}
-    base_id = slugify(label)
-    user_id = base_id
-    i = 2
-    while user_id in existing_ids:
-        user_id = f"{base_id}_{i}"
-        i += 1
-
     new_user = {
-        "id": user_id,
+        "id": str(uuid.uuid4()),
         "label": label,
         "initials": make_initials(label),
     }
     try:
-        users_collection.insert_one(dict(new_user))
-    except PyMongoError as e:
+        with db() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (id, label, initials) VALUES (%s, %s, %s)",
+                (new_user["id"], new_user["label"], new_user["initials"]),
+            )
+    except psycopg.Error as e:
         return jsonify({"error": f"Could not save user: {e}"}), 500
 
     return jsonify({**new_user, "authenticated": False}), 201
@@ -558,12 +529,14 @@ def add_user():
 @login_required
 def delete_user(user_id):
     users = load_users()
-    u = find_user(users, user_id)
+    u = find_user(users, uuid.UUID(user_id))
     if not u:
         return jsonify({"error": "User not found"}), 404
 
-    users_collection.delete_one({"id": user_id})
-    delete_stored_token(user_id)
+    with db() as conn, conn.cursor() as cur:
+        # ON DELETE CASCADE on tokens/oauth_state/health_daily/health_readings
+        # (see schema.sql) means this alone cleans up everything for the user.
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
 
     return jsonify({"status": "deleted"})
 
@@ -591,6 +564,7 @@ def _load_google_oauth_config():
 @login_required
 def auth_start():
     user = request.args.get("user", "user1")
+    user = uuid.UUID(user)
     users = load_users()
     if not find_user(users, user):
         return jsonify({"error": "Unknown user. Add them first."}), 404
@@ -616,15 +590,18 @@ def auth_start():
         access_type="offline", prompt="consent",
     )
 
-    oauth_state_collection.insert_one({
-        "state": state,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "token_uri": token_endpoint,
-        "redirect_uri": redirect_uri,
-        "user": user,
-        "created_at": datetime.utcnow(),
-    })
+    with db() as conn, conn.cursor() as cur:
+        # Opportunistic cleanup of abandoned sign-ins — cheap since this
+        # table stays tiny. Postgres has no TTL index like Mongo did, so
+        # expiry is enforced here and at read time in /callback below.
+        cur.execute("DELETE FROM oauth_state WHERE created_at < now() - interval '10 minutes'")
+        cur.execute(
+            """
+            INSERT INTO oauth_state (state, client_id, client_secret, token_uri, redirect_uri, user_id, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, now())
+            """,
+            (state, client_id, client_secret, token_endpoint, redirect_uri, user),
+        )
 
     return jsonify({"auth_url": auth_url})
 
@@ -634,31 +611,50 @@ def callback():
     from requests_oauthlib import OAuth2Session
 
     state = request.args.get("state")
-    state_doc = oauth_state_collection.find_one({"state": state}) if state else None
-    if not state_doc:
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM oauth_state WHERE state = %s AND created_at > now() - interval '10 minutes'",
+            (state,),
+        )
+        state_row = cur.fetchone() if state else None
+    if not state_row:
         return "State expired or invalid. Please restart sign-in from the dashboard.", 400
 
     oauth = OAuth2Session(
-        state_doc["client_id"], scope=SCOPES,
-        redirect_uri=state_doc["redirect_uri"], state=state,
+        state_row["client_id"], scope=SCOPES,
+        redirect_uri=state_row["redirect_uri"], state=state,
     )
     token = oauth.fetch_token(
-        state_doc["token_uri"],
+        state_row["token_uri"],
         authorization_response=request.url,
-        client_secret=state_doc["client_secret"],
+        client_secret=state_row["client_secret"],
         include_client_id=True,
     )
     creds = Credentials(
         token         = token.get("access_token"),
         refresh_token = token.get("refresh_token"),
-        token_uri     = state_doc["token_uri"],
-        client_id     = state_doc["client_id"],
-        client_secret = state_doc["client_secret"],
+        token_uri     = state_row["token_uri"],
+        client_id     = state_row["client_id"],
+        client_secret = state_row["client_secret"],
         scopes        = SCOPES,
     )
-    user = state_doc.get("user", "user1")
+    user = state_row["user_id"]
     save_stored_token(user, creds)
-    oauth_state_collection.delete_one({"state": state})
+    try:
+        userinfo = requests.get(USERINFO_URL, headers=get_headers(creds), timeout=5)
+        if userinfo.status_code == 200:
+            email = userinfo.json().get("email")
+            if email:
+                with db() as conn, conn.cursor() as cur:
+                    cur.execute("UPDATE users SET email = %s WHERE id = %s", (email, user))
+    except (requests.RequestException, psycopg.Error) as e:
+        # Most likely cause of a psycopg error here: this same Google account
+        # is already linked to a different dashboard user (email is UNIQUE).
+        # Not fatal — the token was already saved; just log and move on.
+        print(f"[callback] Could not save email for {user}: {e}")
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM oauth_state WHERE state = %s", (state,))
 
     return """
     <html><body style="font-family:sans-serif;max-width:500px;margin:80px auto;text-align:center">
@@ -671,6 +667,7 @@ def callback():
 @login_required
 def auth_status():
     user = request.args.get("user", "user1")
+    user = uuid.UUID(user)
     creds = get_credentials(user)
     return jsonify({"authenticated": creds is not None})
 
@@ -680,6 +677,7 @@ def auth_status():
 @require_api_key
 def health_data():
     user = request.args.get("user", "user1")
+    user = uuid.UUID(user)
     date = request.args.get("date")
 
     users = load_users()
@@ -711,19 +709,24 @@ def health_data():
 
 @app.route("/health")
 def health_check():
-    """Liveness check for Railway's deploy health check — not the same as
-    /api/health (Fitbit data). Verifies Mongo is reachable too."""
+    """Liveness check for the platform's deploy health check — not the same
+    as /api/health (Fitbit data). Verifies Postgres is reachable too."""
     try:
-        _mongo_client.admin.command("ping")
+        with db() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
         return jsonify({"status": "ok"}), 200
-    except PyMongoError:
-        return jsonify({"status": "degraded", "mongo": "unreachable"}), 503
+    except psycopg.Error:
+        return jsonify({"status": "degraded", "database": "unreachable"}), 503
 
 # ── Serve frontend ────────────────────────────────────────────────────────────
 
 @app.route("/")
 @login_required
 def index():
+    # api_key is injected into the page's JS so the dashboard's own fetch
+    # calls to /api/health can authenticate. It's still visible to anyone
+    # who can load this page (view-source, dev tools) — acceptable for a
+    # private/internal dashboard, but don't expose this URL publicly.
     return render_template("index.html", api_key=API_KEY or "")
 
 
