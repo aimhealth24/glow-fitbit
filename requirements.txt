@@ -8,3 +8,4 @@ python-dotenv==1.0.1
 tzdata==2024.1
 psycopg[binary]==3.2.10
 psycopg_pool==3.2.8
+flask-swagger-ui

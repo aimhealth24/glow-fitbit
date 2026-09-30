@@ -291,6 +291,12 @@
   .card-unit { font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
   .card-sub { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; }
 
+  /* ── Stress category coloring ── */
+  .card-unit.stress-low      { color: var(--green);  font-weight: 500; }
+  .card-unit.stress-typical  { color: var(--blue);   font-weight: 500; }
+  .card-unit.stress-elevated { color: var(--orange);  font-weight: 500; }
+  .card-unit.stress-high     { color: var(--red);    font-weight: 500; }
+
   /* ── Sleep stages ── */
   .sleep-stages { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; margin-top: 12px; }
 
@@ -580,6 +586,19 @@
             <div class="card-value" id="v-temp">—</div>
             <div class="card-unit">°C from baseline</div>
           </div>
+          <div class="card">
+            <div class="card-top">
+              <div><div class="card-label">Stress</div></div>
+              <div class="card-symbol purple">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6941c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+              </div>
+            </div>
+            <div class="card-value" id="v-stress">—</div>
+            <div class="card-unit" id="v-stress-category">—</div>
+            <div class="card-sub" id="v-stress-sub">—</div>
+          </div>
         </div>
       </div>
 
@@ -724,6 +743,17 @@
     const el = document.getElementById("status");
     el.textContent = msg;
     el.className = "status-tag " + cls;
+  }
+
+  // ── Stress category → CSS class (colors the category label) ───────────────
+  function stressCategoryClass(category) {
+    switch (category) {
+      case "Low":       return "stress-low";
+      case "Typical":   return "stress-typical";
+      case "Elevated":  return "stress-elevated";
+      case "High":      return "stress-high";
+      default:          return "";
+    }
   }
 
   // ── User list ───────────────────────────────────────────────────────────────
@@ -969,6 +999,26 @@
     set("v-br",   d.breathing_rate ? fmt(d.breathing_rate, 1) : null);
     set("v-spo2", d.spo2 ? fmt(d.spo2, 1) : null);
     set("v-temp", d.skin_temp != null ? fmt(d.skin_temp, 1) : null);
+
+    // ── Stress ──────────────────────────────────────────────────────────────
+    // d.stress is {score, category, days_of_baseline} from /api/health, or
+    // {score: null, category: "Insufficient history" | "Unavailable", ...}
+    // when there isn't enough trailing HRV/RHR history for this user yet.
+    const stress = d.stress || {};
+    set("v-stress", stress.score != null ? fmt(stress.score) : null);
+
+    const categoryEl = document.getElementById("v-stress-category");
+    categoryEl.textContent = stress.category || "N/A";
+    categoryEl.className = "card-unit " + stressCategoryClass(stress.category);
+
+    const subEl = document.getElementById("v-stress-sub");
+    if (stress.score != null && stress.days_of_baseline != null) {
+      subEl.textContent = `${stress.days_of_baseline}-day personal baseline`;
+    } else if (stress.days_of_baseline != null) {
+      subEl.textContent = `${stress.days_of_baseline}/5 days of history collected`;
+    } else {
+      subEl.textContent = "";
+    }
 
     const sl = d.sleep || {};
     set("sleep-score", sl.sleep_score != null ? fmt(sl.sleep_score.score) : null);

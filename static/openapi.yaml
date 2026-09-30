@@ -1,0 +1,243 @@
+openapi: 3.0.3
+info:
+  title: Health Dashboard API
+  description: |
+    Public integration surface for the Health Dashboard: fetches a user's
+    per-day health metrics (activity, heart/vitals, sleep, and a derived
+    stress score) pulled from Google Health and cached in Postgres.
+
+    This spec intentionally documents only the machine-to-machine data
+    endpoint. The dashboard's own admin/session-authenticated endpoints
+    (user management, the Google OAuth flow) are internal to the web UI
+    and aren't part of the external integration surface, so they're left
+    out of these docs — they still exist and are still protected by their
+    own auth, just not advertised here.
+  version: "1.0.0"
+
+servers:
+  - url: /
+    description: Same-origin (this API is typically called from the same host that serves it)
+
+tags:
+  - name: Health Data
+    description: Fetch a day's health metrics (machine-to-machine, API-key protected)
+  - name: Ops
+    description: Liveness/health checks
+
+components:
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >
+        Static shared secret (the server's API_KEY env var). Required for
+        GET /api/health. This is the only auth mechanism external
+        integrators need — no login or session cookie involved.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    SleepScore:
+      type: object
+      nullable: true
+      properties:
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        category:
+          type: string
+          enum: [Excellent, Good, Fair, Poor]
+
+    SleepStages:
+      type: object
+      description: Minutes spent in each sleep stage, keyed by stage name.
+      additionalProperties:
+        type: integer
+      example: { DEEP: 62, LIGHT: 210, REM: 88, AWAKE: 14 }
+
+    Sleep:
+      type: object
+      properties:
+        minutes_asleep:
+          type: integer
+        minutes_awake:
+          type: integer
+        minutes_in_bed:
+          type: integer
+        stages:
+          $ref: '#/components/schemas/SleepStages'
+        sleep_score:
+          $ref: '#/components/schemas/SleepScore'
+
+    Stress:
+      type: object
+      description: >
+        Same-day physiological stress estimate (0–100, higher = more stress)
+        computed against this user's own trailing HRV/resting-HR baseline.
+        A heuristic approximation, not a clinical measure.
+      properties:
+        score:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: null until enough baseline history exists for this user.
+        category:
+          type: string
+          enum: [Low, Typical, Elevated, High, Insufficient history, Unavailable]
+        days_of_baseline:
+          type: integer
+          nullable: true
+          description: How many days of trailing history the score (or lack of one) is based on.
+
+    HealthData:
+      type: object
+      properties:
+        steps:
+          type: integer
+        distance_miles:
+          type: number
+          format: float
+        vo2max:
+          type: number
+          format: float
+          nullable: true
+        swim_strokes:
+          type: integer
+          nullable: true
+        hr_avg:
+          type: integer
+          nullable: true
+        hr_min:
+          type: integer
+          nullable: true
+        hr_max:
+          type: integer
+          nullable: true
+        resting_hr:
+          type: integer
+          nullable: true
+        hrv:
+          type: number
+          format: float
+          nullable: true
+          description: Average HRV (RMSSD, ms).
+        breathing_rate:
+          type: number
+          format: float
+          nullable: true
+        spo2:
+          type: number
+          format: float
+          nullable: true
+        skin_temp:
+          type: number
+          format: float
+          nullable: true
+          description: Nightly skin temperature variation from baseline, °C.
+        sleep:
+          $ref: '#/components/schemas/Sleep'
+        stress:
+          $ref: '#/components/schemas/Stress'
+        _saved_to_db:
+          type: boolean
+          description: Whether this response was successfully cached to Postgres.
+
+paths:
+  /api/health:
+    get:
+      tags: [Health Data]
+      summary: Fetch one user's health metrics for one day
+      description: >
+        Pulls activity, heart/vitals, and sleep data from Google Health for
+        the given date, computes a derived stress score against the user's
+        trailing baseline, caches the result in Postgres, and returns it.
+        This is the main integration point for external callers — protected
+        by X-API-Key rather than the dashboard session cookie.
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - name: user
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+            example: "2026-09-29"
+      responses:
+        '200':
+          description: Health data for the requested user/day
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthData'
+        '400':
+          description: Missing or malformed date
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing/invalid API key, or user not authenticated with Google
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Upstream Google Health fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags: [Ops]
+      summary: Liveness check
+      description: >
+        Platform deploy health check. Verifies Postgres connectivity. Not
+        to be confused with /api/health, which returns a person's actual
+        health metrics.
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+        '503':
+          description: Postgres unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [degraded]
+                  database:
+                    type: string
+                    enum: [unreachable]

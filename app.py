@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import math
 from functools import wraps
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, render_template, session, redirect, url_for
@@ -13,6 +14,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+from flask_swagger_ui import get_swaggerui_blueprint
 
 # Loads variables from a local .env file if one exists (for local dev only).
 # In Railway, real environment variables are already set on the platform, so
@@ -64,6 +66,23 @@ if ENVIRONMENT != "production":
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
+# ── API docs (Swagger UI) ────────────────────────────────────────────────
+# Serves an interactive docs page at /apidocs, reading the spec from
+# static/openapi.yaml (served automatically since static_folder="static"
+# above). Nothing here validates requests/responses against the spec —
+# it's docs only, kept in sync by hand. If the two ever drift, the spec is
+# wrong, not the app: trust app.py's actual behavior over the YAML.
+SWAGGER_URL = "/apidocs"
+API_SPEC_URL = "/static/openapi.yaml"
+app.register_blueprint(
+    get_swaggerui_blueprint(
+        SWAGGER_URL,
+        API_SPEC_URL,
+        config={"app_name": "Health Dashboard API"},
+    ),
+    url_prefix=SWAGGER_URL,
+)
+
 # ── Postgres setup ──────────────────────────────────────────────────────────
 # One pool per worker process (gunicorn spawns several); psycopg_pool handles
 # checking connections out/in and reconnecting if the server drops one.
@@ -78,6 +97,25 @@ def db():
     return _db_pool.connection()
 
 
+def _period_bounds(date, timezone="America/Chicago"):
+    """Returns the (period_start, period_end) timestamps used to key a day's
+    row in health_snapshots:
+        Start: YYYY-MM-DD 00:00:00
+        End:   YYYY-MM-DD 11:59:59
+    Shared by save_health_data (to write a day) and the stress-baseline
+    lookup below (to window past days), so both agree on exactly what a
+    "day" means for this table.
+    """
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(timezone)
+    period_start = datetime.strptime(date, "%Y-%m-%d").replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=tz,
+    )
+    period_end = period_start.replace(hour=11, minute=59, second=59, microsecond=0)
+    return period_start, period_end
+
+
 def save_health_data(user_id, date, data, timezone="America/Chicago"):
     """Save health data for the requested date.
 
@@ -85,28 +123,8 @@ def save_health_data(user_id, date, data, timezone="America/Chicago"):
         Start: YYYY-MM-DD 00:00:00
         End:   YYYY-MM-DD 11:59:59
     """
-
-    from zoneinfo import ZoneInfo
-
     try:
-        tz = ZoneInfo(timezone)
-
-        period_start = datetime.strptime(
-            date, "%Y-%m-%d"
-        ).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-            tzinfo=tz,
-        )
-
-        period_end = period_start.replace(
-            hour=11,
-            minute=59,
-            second=59,
-            microsecond=0,
-        )
+        period_start, period_end = _period_bounds(date, timezone)
 
         with db() as conn, conn.cursor() as cur:
             cur.execute(
@@ -330,6 +348,21 @@ def list_by_date(creds, data_type, filter_name, date):
     return list_points(creds, data_type, filter_str)
 
 
+def list_by_date_range(creds, data_type, filter_name, start_date, end_date):
+    """Same as list_by_date, but takes an explicit [start_date, end_date)
+    range instead of a single day. Used by the stress-score baseline
+    fallback to pull a whole trailing window from Google Health in one call
+    instead of one request per day.
+
+    data_type is the hyphenated API path segment (e.g. "daily-heart-rate-
+    variability"); filter_name is the underscored field name the API expects
+    inside the filter expression (e.g. "daily_heart_rate_variability") —
+    same two-name convention as list_by_date above.
+    """
+    filter_str = f'{filter_name}.date >= "{start_date}" AND {filter_name}.date < "{end_date}"'
+    return list_points(creds, data_type, filter_str, page_size=1000)
+
+
 def list_by_civil_time(creds, data_type, filter_name, date):
     next_day   = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     filter_str = f'{filter_name}.sample_time.civil_time >= "{date}" AND {filter_name}.sample_time.civil_time < "{next_day}"'
@@ -375,7 +408,7 @@ def fetch_all(creds, date):
     result["hr_max"] = max(bpms) if bpms else None
 
     rhr_pts = list_by_date(creds, "daily-resting-heart-rate", "daily_resting_heart_rate", date)
-    result["resting_hr"] = rhr_pts[0].get("dailyRestingHeartRate", {}).get("beatsPerMinute") if rhr_pts else None
+    result["resting_hr"] = float(rhr_pts[0].get("dailyRestingHeartRate", {}).get("beatsPerMinute")) if rhr_pts else None
 
     hrv_pts = list_by_date(creds, "daily-heart-rate-variability", "daily_heart_rate_variability", date)
     result["hrv"] = hrv_pts[0].get("dailyHeartRateVariability", {}).get("averageHeartRateVariabilityMilliseconds") if hrv_pts else None
@@ -452,6 +485,178 @@ def calculate_sleep_score(summary: dict) -> dict:
         category = "Poor"
 
     return {"score": score, "category": category}
+
+
+# ── Stress score ──────────────────────────────────────────────────────────
+# HRV and resting heart rate are well-established stress/recovery correlates
+# in the literature, but their *absolute* values vary hugely person to
+# person — a resting HRV of 30ms is normal for one person and a red flag for
+# another. So rather than using population thresholds, this compares each
+# day against that same user's own trailing baseline.
+#
+# Baseline is read from Postgres (health_snapshots) first, since that's a
+# cache of exactly the rollups we'd otherwise re-fetch from Google. If the
+# DB doesn't have enough *recent* history for this user yet (new user, gap
+# in syncing), and Google credentials are available, we fall back to
+# pulling the trailing window straight from the Google Health API for that
+# one request. Subsequent /api/health calls backfill health_snapshots as a
+# side effect (see health_data()), so the DB fills in naturally and the API
+# fallback stops firing once enough days have accumulated.
+
+BASELINE_WINDOW_DAYS = 14
+MIN_BASELINE_DAYS = 5  # below this, we don't have enough history to trust a personal baseline
+
+
+def _fetch_baseline_from_api(creds, before_date, days=BASELINE_WINDOW_DAYS):
+    """Pulls up to `days` of trailing HRV / resting-HR history directly from
+    Google Health, for the window [before_date - days, before_date).
+    Used only as a fallback when Postgres doesn't have enough recent rows —
+    see _fetch_baseline_metrics below."""
+    start_date = (datetime.strptime(before_date, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    hrv_pts = list_by_date_range(
+        creds, "daily-heart-rate-variability", "daily_heart_rate_variability", start_date, before_date
+    )
+    hrv_hist = [
+        p.get("dailyHeartRateVariability", {}).get("averageHeartRateVariabilityMilliseconds")
+        for p in hrv_pts
+    ]
+    hrv_hist = [v for v in hrv_hist if v is not None]
+
+    rhr_pts = list_by_date_range(
+        creds, "daily-resting-heart-rate", "daily_resting_heart_rate", start_date, before_date
+    )
+    rhr_hist = [p.get("dailyRestingHeartRate", {}).get("beatsPerMinute") for p in rhr_pts]
+    rhr_hist = [float(v) for v in rhr_hist if v is not None]
+
+    return hrv_hist, rhr_hist
+
+
+def _fetch_baseline_metrics(user_id, before_date, creds=None, days=BASELINE_WINDOW_DAYS):
+    """Returns the hrv/resting_hr history to compare `before_date` against:
+    up to `days` most recent stored health_snapshots rows strictly before
+    `before_date`'s period, and no older than `days` days back — a genuine
+    trailing window, never including the day being scored itself, and never
+    silently reaching back months just to find enough rows.
+
+    If Postgres doesn't have enough recent history for either metric and
+    `creds` is provided, falls back to fetching that metric's window
+    straight from the Google Health API instead of under-reporting."""
+    period_start, _ = _period_bounds(before_date)
+    window_start = period_start - timedelta(days=days)
+
+    with db() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT data FROM health_snapshots
+            WHERE user_id = %s
+              AND period_start < %s
+              AND period_start >= %s
+            ORDER BY period_start DESC
+            LIMIT %s
+            """,
+            (user_id, period_start, window_start, days),
+        )
+        rows = cur.fetchall()
+    hrv_hist = [r["data"].get("hrv") for r in rows if r["data"].get("hrv") is not None]
+    rhr_hist = [float(r["data"].get("resting_hr")) for r in rows if r["data"].get("resting_hr") is not None]
+
+    if creds and (len(hrv_hist) < MIN_BASELINE_DAYS or len(rhr_hist) < MIN_BASELINE_DAYS):
+        try:
+            api_hrv, api_rhr = _fetch_baseline_from_api(creds, before_date, days)
+        except Exception as e:
+            print(f"[stress] API baseline fallback failed for {user_id}: {e}")
+            api_hrv, api_rhr = [], []
+        if len(hrv_hist) < MIN_BASELINE_DAYS:
+            hrv_hist = api_hrv
+        if len(rhr_hist) < MIN_BASELINE_DAYS:
+            rhr_hist = api_rhr
+
+    return hrv_hist, rhr_hist
+
+
+def _mean_std(values):
+    """Sample mean and standard deviation. Returns (None, None) if there
+    isn't enough history to compute a meaningful baseline."""
+    if len(values) < MIN_BASELINE_DAYS:
+        return None, None
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+    return mean, variance ** 0.5
+
+
+def calculate_stress_score(user_id, date, hrv, resting_hr, breathing_rate, creds=None):
+    """
+    Estimates a same-day physiological stress score (0-100, higher = more
+    stress) by comparing today's HRV and resting heart rate against this
+    user's own trailing 14-day baseline, with breathing rate as a smaller
+    supporting signal.
+
+    `creds`, if provided, lets the baseline lookup fall back to the Google
+    Health API when Postgres doesn't have enough recent history yet (see
+    _fetch_baseline_metrics).
+
+    NOTE: This is a heuristic approximation, not a validated clinical
+    measure — it flags days that look unusual FOR THIS PERSON, not a
+    diagnosis. Returns score=None until at least MIN_BASELINE_DAYS of prior
+    history exist, rather than guessing from population norms that don't
+    transfer well between individuals (especially for HRV).
+    """
+    hrv_hist, rhr_hist = _fetch_baseline_metrics(user_id, date, creds=creds)
+    hrv_mean, hrv_std = _mean_std(hrv_hist)
+    rhr_mean, rhr_std = _mean_std(rhr_hist)
+
+    if hrv_mean is None and rhr_mean is None:
+        return {
+            "score": None,
+            "category": "Insufficient history",
+            "days_of_baseline": max(len(hrv_hist), len(rhr_hist)),
+        }
+
+    contributions = []  # (z_score, weight) — positive z always means "more stress"
+
+    if hrv_std:
+        # Lower HRV than this person's own baseline => more stress.
+        contributions.append(((hrv_mean - hrv) / hrv_std, 0.50))
+    if rhr_std:
+        # Higher resting HR than this person's own baseline => more stress.
+        contributions.append(((resting_hr - rhr_mean) / rhr_std, 0.35))
+    if breathing_rate is not None:
+        # No personal baseline tracked for this one — a light, populationlevel
+        # nudge (typical resting adult range is ~12-20 breaths/min) rather
+        # than a full z-score contribution.
+        contributions.append((max(0.0, (breathing_rate - 16) / 4), 0.15))
+
+    if not contributions:
+        return {
+            "score": None,
+            "category": "Insufficient history",
+            "days_of_baseline": max(len(hrv_hist), len(rhr_hist)),
+        }
+
+    weighted_z = sum(z * w for z, w in contributions) / sum(w for _, w in contributions)
+
+    # Squash the unbounded, dampened z-score into 0-100, centered on 50
+    # ("a typical day for this person"). The /1.5 damping keeps a single
+    # 1-sigma deviation from swinging the score too aggressively.
+    score = round(100 / (1 + math.exp(-weighted_z / 1.5)))
+    score = max(0, min(100, score))
+
+    if score >= 75:
+        category = "High"
+    elif score >= 55:
+        category = "Elevated"
+    elif score >= 30:
+        category = "Typical"
+    else:
+        category = "Low"
+
+    return {
+        "score": score,
+        "category": category,
+        "days_of_baseline": max(len(hrv_hist), len(rhr_hist)),
+    }
+
 
 # ── User management endpoints ─────────────────────────────────────────────────
 
@@ -700,6 +905,23 @@ def health_data():
     except Exception as e:
         print(f"[health_data] error fetching for {user}/{date}: {e}")
         return jsonify({"error": "Failed to fetch health data"}), 500
+
+    # Stress score needs this user's own history, which lives in Postgres —
+    # computed here rather than inside fetch_all, which only talks to the
+    # Google Health API and has no database access of its own. `creds` is
+    # passed through so the baseline lookup can fall back to the API itself
+    # if Postgres doesn't have enough recent history yet (new/sparse users).
+    try:
+        result["stress"] = calculate_stress_score(
+            user, date,
+            hrv=result.get("hrv"),
+            resting_hr=result.get("resting_hr"),
+            breathing_rate=result.get("breathing_rate"),
+            creds=creds,
+        )
+    except psycopg.Error as e:
+        print(f"[health_data] stress score lookup failed for {user}/{date}: {e}")
+        result["stress"] = {"score": None, "category": "Unavailable"}
 
     saved = save_health_data(user, date, result)
     result["_saved_to_db"] = saved
