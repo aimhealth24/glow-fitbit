@@ -53,6 +53,29 @@
     z-index: 10;
   }
 
+  /* ── Global progress bar (sits on the bottom edge of the top bar) ── */
+  .progress {
+    position: fixed;
+    top: 55px; left: 0; right: 0;
+    height: 3px;
+    z-index: 11;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  .progress.active { opacity: 1; }
+  .progress-bar {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--blue), #53b1fd);
+    border-radius: 0 3px 3px 0;
+    box-shadow: 0 0 8px rgba(21, 112, 239, 0.5);
+    transition: width 0.25s ease-out;
+  }
+  .progress.error .progress-bar {
+    background: var(--red);
+    box-shadow: 0 0 8px rgba(217, 45, 32, 0.5);
+  }
+
   .brand { display: flex; align-items: center; gap: 10px; }
 
   .brand-icon {
@@ -185,14 +208,22 @@
   /* ── Main layout ── */
   .main { flex: 1; min-width: 0; max-width: 1080px; margin: 0 auto; padding: 28px 24px; }
 
-  /* ── Date bar ── */
+  /* ── Time-window bar ── */
   .datebar {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 16px 20px;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 12px;
     margin-bottom: 24px; flex-wrap: wrap;
+  }
+
+  /* User badge now lives on its own row at the top of the panel */
+  .datebar-top {
+    width: 100%;
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
   }
 
   .datebar-label { font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
@@ -208,13 +239,17 @@
     font-family: 'IBM Plex Mono', monospace;
   }
 
-  input[type="date"] {
+  input[type="datetime-local"] {
     border: 1px solid var(--border2); border-radius: var(--radius);
     padding: 7px 12px; font-family: 'IBM Plex Mono', monospace;
     font-size: 13px; color: var(--text); background: var(--bg);
     outline: none; transition: border-color 0.15s;
   }
-  input[type="date"]:focus { border-color: var(--blue); }
+  input[type="datetime-local"]:focus { border-color: var(--blue); }
+
+  .preset-row { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; align-items: center; }
+  .preset-row .hint { font-size: 11px; color: var(--faint); margin-left: auto; font-family: 'IBM Plex Mono', monospace; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
 
   .status-tag {
     margin-left: auto; font-family: 'IBM Plex Mono', monospace;
@@ -224,6 +259,34 @@
   .status-tag.loading { color: var(--blue); }
   .status-tag.error   { color: var(--red); }
   .status-tag.ok      { color: var(--green); }
+  .status-tag.warn    { color: var(--orange); }
+
+  /* ── Operation progress row (inside the time-window panel) ── */
+  .op-progress {
+    width: 100%;
+    display: none; align-items: center; gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .op-progress.show { display: flex; }
+  .op-label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--blue);
+    white-space: nowrap;
+  }
+  .op-track {
+    flex: 1; height: 6px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 3px; overflow: hidden;
+  }
+  .op-fill {
+    height: 100%; width: 0%; background: var(--blue); border-radius: 3px;
+    transition: width 0.25s ease-out, background 0.2s;
+  }
+  .op-progress.error .op-fill  { background: var(--red); }
+  .op-progress.error .op-label { color: var(--red); }
+  .op-pct {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted);
+    width: 34px; text-align: right;
+  }
 
   /* ── Connect prompt ── */
   .connect-prompt {
@@ -236,6 +299,21 @@
   }
   .connect-prompt-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
   .connect-prompt-sub { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+
+  /* ── Day / session chips ── */
+  .chipbar {
+    display: none; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .chipbar.show { display: flex; }
+  .chipbar-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+  .chip {
+    padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border2);
+    background: var(--surface); color: var(--text2); cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  }
+  .chip:hover { background: var(--bg); }
+  .chip.active { background: var(--blue-bg); color: var(--blue); border-color: #bfdbfe; }
 
   /* ── Section header ── */
   .section { margin-bottom: 24px; }
@@ -280,6 +358,15 @@
   .card-symbol.orange { background: var(--orange-bg); }
 
   .card-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Marks day-driven metrics: one value per calendar day, not tied to the window */
+  .card-tag {
+    display: inline-block; margin-top: 4px;
+    padding: 0 6px; border-radius: 4px;
+    font-size: 10px; font-weight: 500; letter-spacing: 0.3px; text-transform: uppercase;
+    background: var(--bg); color: var(--faint); border: 1px solid var(--border);
+    font-family: 'IBM Plex Mono', monospace;
+  }
 
   .card-value {
     font-size: 28px; font-weight: 600; color: var(--text);
@@ -330,6 +417,10 @@
   .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
   .empty-text { font-size: 14px; }
   .empty-sub  { font-size: 12px; margin-top: 6px; color: var(--faint); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress-bar, .op-fill, .progress { transition: none; }
+  }
 </style>
 </head>
 <body>
@@ -352,6 +443,11 @@
     <button class="btn btn-primary" id="auth-btn" onclick="handleAuth()">Connect Account</button>
     <a href="/logout" class="btn" style="text-decoration:none;">Sign out</a>
   </div>
+</div>
+
+<!-- Global progress bar (driven by the api() wrapper) -->
+<div class="progress" id="progress" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+  <div class="progress-bar" id="progress-bar"></div>
 </div>
 
 <div class="app-body">
@@ -378,18 +474,41 @@
   <!-- Main -->
   <div class="main">
 
-    <!-- Date bar -->
+    <!-- Time-window bar -->
     <div class="datebar">
-      <span class="datebar-label">Date</span>
-      <input type="date" id="date-input"/>
-      <div class="user-context-badge" id="user-badge">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-        </svg>
-        <span id="user-badge-label">—</span>
+
+      <!-- Row 1: who we're viewing -->
+      <div class="datebar-top">
+        <span class="datebar-label">Viewing</span>
+        <div class="user-context-badge" id="user-badge">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span id="user-badge-label">—</span>
+        </div>
       </div>
+
+      <!-- Row 2: time window controls -->
+      <span class="datebar-label">From</span>
+      <input type="datetime-local" id="from-input"/>
+      <span class="datebar-label">To</span>
+      <input type="datetime-local" id="to-input"/>
       <button class="btn btn-primary" id="fetch-btn" onclick="fetchData()" disabled>Fetch Data</button>
       <div class="status-tag" id="status">—</div>
+
+      <div class="preset-row">
+        <button class="btn btn-sm" onclick="presetDay(1)">Yesterday</button>
+        <button class="btn btn-sm" onclick="presetDay(0)">Today so far</button>
+        <button class="btn btn-sm" onclick="presetDays(7)">Last 7 days</button>
+        <span class="hint" id="window-hint">Times use the server's timezone · window is From inclusive, To exclusive · 1 min – 31 days</span>
+      </div>
+
+      <!-- Row 3: progress for the running API operation(s) -->
+      <div class="op-progress" id="op-progress">
+        <span class="op-label" id="op-label">—</span>
+        <div class="op-track"><div class="op-fill" id="op-fill"></div></div>
+        <span class="op-pct" id="op-pct">0%</span>
+      </div>
     </div>
 
     <!-- Connect prompt (shown when user not authenticated) -->
@@ -427,12 +546,18 @@
           </svg>
         </div>
         <div class="empty-text" id="empty-text">No data loaded</div>
-        <div class="empty-sub" id="empty-sub">Connect an account and select a date to view health metrics</div>
+        <div class="empty-sub" id="empty-sub">Connect an account and choose a time window to view health metrics</div>
       </div>
     </div>
 
     <!-- Dashboard -->
     <div id="dashboard">
+
+      <!-- Day picker: only shown when the window spans more than one calendar day -->
+      <div class="chipbar" id="day-bar">
+        <span class="chipbar-label">Daily metrics for</span>
+        <span id="day-chips" style="display:contents"></span>
+      </div>
 
       <!-- Activity -->
       <div class="section">
@@ -458,7 +583,7 @@
               </div>
             </div>
             <div class="card-value" id="v-steps">—</div>
-            <div class="card-unit">steps</div>
+            <div class="card-unit">steps in window</div>
           </div>
           <div class="card">
             <div class="card-top">
@@ -471,11 +596,14 @@
               </div>
             </div>
             <div class="card-value" id="v-distance">—</div>
-            <div class="card-unit">miles</div>
+            <div class="card-unit">miles in window</div>
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">Cardio Fitness</div></div>
+              <div>
+                <div class="card-label">Cardio Fitness</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol green">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#039855" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
@@ -496,7 +624,7 @@
               </div>
             </div>
             <div class="card-value" id="v-swim">—</div>
-            <div class="card-unit">total strokes</div>
+            <div class="card-unit">strokes in window</div>
           </div>
         </div>
       </div>
@@ -510,6 +638,7 @@
             </svg>
           </div>
           <div class="section-title">Heart &amp; Vitals</div>
+          <div class="section-sub" id="day-label"></div>
         </div>
         <div class="cards">
           <div class="card">
@@ -522,12 +651,15 @@
               </div>
             </div>
             <div class="card-value" id="v-hr">—</div>
-            <div class="card-unit">bpm average</div>
+            <div class="card-unit">bpm average (window)</div>
             <div class="card-sub" id="v-hr-range">min — / max —</div>
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">Resting HR</div></div>
+              <div>
+                <div class="card-label">Resting HR</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol red">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d92d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
@@ -539,7 +671,10 @@
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">HRV</div></div>
+              <div>
+                <div class="card-label">HRV</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol orange">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc6803" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M2 12h4l3-9 4 18 3-9h4"/>
@@ -551,7 +686,10 @@
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">Breathing Rate</div></div>
+              <div>
+                <div class="card-label">Breathing Rate</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol blue">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1570ef" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7z"/>
@@ -564,7 +702,10 @@
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">SpO₂</div></div>
+              <div>
+                <div class="card-label">SpO₂</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol red">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d92d20" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="4"/>
@@ -576,7 +717,10 @@
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">Skin Temp Var.</div></div>
+              <div>
+                <div class="card-label">Skin Temp Var.</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol orange">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc6803" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>
@@ -585,10 +729,14 @@
             </div>
             <div class="card-value" id="v-temp">—</div>
             <div class="card-unit">°C from baseline</div>
+            <div class="card-sub" id="v-temp-sub">—</div>
           </div>
           <div class="card">
             <div class="card-top">
-              <div><div class="card-label">Stress</div></div>
+              <div>
+                <div class="card-label">Stress</div>
+                <span class="card-tag">daily</span>
+              </div>
               <div class="card-symbol purple">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6941c6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
@@ -611,6 +759,11 @@
             </svg>
           </div>
           <div class="section-title">Sleep</div>
+          <div class="section-sub" id="sleep-label">sessions ending in window</div>
+        </div>
+        <div class="chipbar" id="sleep-bar">
+          <span class="chipbar-label">Session</span>
+          <span id="sleep-chips" style="display:contents"></span>
         </div>
         <div class="cards">
           <div class="card">
@@ -714,13 +867,144 @@
     ["#dc2626", "#fff"], ["#4d7c0f", "#fff"],
   ];
 
-  let USERS = [];        // [{id, label, initials, authenticated}]
-  let activeUser = null;
+  const MAX_WINDOW_DAYS = 31;   // keep in sync with MAX_WINDOW_DAYS in app.py
+  const MIN_WINDOW_SECONDS = 60;
 
-  // ── Default date = yesterday ───────────────────────────────────────────────
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  document.getElementById("date-input").value = d.toISOString().split("T")[0];
+  let USERS = [];        // [{id, label, initials, email, authenticated}]
+  let activeUser = null;
+  let LAST = null;       // last /api/health response
+  let dayIdx = 0;        // selected entry of LAST.daily
+  let sleepIdx = 0;      // selected entry of LAST.windowed.sleep
+
+  // ── Progress tracking ───────────────────────────────────────────────────────
+  // Every API call goes through api(). Each call registers an operation with
+  // Progress; the bar trickles toward 90% while any operation is running, jumps
+  // to 100% when the last one finishes, and turns red if any of them failed.
+  // The bar shows in two places: a thin line under the top bar, and a labeled
+  // row inside the time-window panel.
+  const Progress = (() => {
+    const ops = new Map();           // id -> label
+    let nextId = 0, value = 0, failed = false;
+    let trickle = null, hideTimer = null;
+
+    const wrap  = document.getElementById("progress");
+    const bar   = document.getElementById("progress-bar");
+    const row   = document.getElementById("op-progress");
+    const fill  = document.getElementById("op-fill");
+    const label = document.getElementById("op-label");
+    const pct   = document.getElementById("op-pct");
+
+    function paint() {
+      const v = Math.round(value);
+      bar.style.width = value + "%";
+      fill.style.width = value + "%";
+      pct.textContent = v + "%";
+      wrap.setAttribute("aria-valuenow", v);
+    }
+
+    function paintLabel(doneText) {
+      if (doneText) { label.textContent = doneText; return; }
+      const labels = [...ops.values()];
+      const extra = labels.length - 1;
+      label.textContent = labels[labels.length - 1] + (extra > 0 ? ` (+${extra} more)` : "");
+    }
+
+    function jumpTo(v) {            // set width without animating
+      bar.style.transition = fill.style.transition = "none";
+      value = v; paint();
+      void bar.offsetWidth;
+      bar.style.transition = fill.style.transition = "";
+    }
+
+    function start(text) {
+      const id = ++nextId;
+      ops.set(id, text);
+      if (ops.size === 1) {
+        clearTimeout(hideTimer);
+        clearInterval(trickle);
+        failed = false;
+        wrap.classList.remove("error");
+        row.classList.remove("error");
+        jumpTo(0);
+        wrap.classList.add("active");
+        row.classList.add("show");
+        value = 8; paint();
+        trickle = setInterval(() => {          // ease toward 90%, never reach it
+          value += (90 - value) * 0.07;
+          paint();
+        }, 200);
+      }
+      paintLabel();
+      return id;
+    }
+
+    function end(id, ok = true) {
+      if (!ops.has(id)) return;
+      ops.delete(id);
+      if (!ok) failed = true;
+
+      if (ops.size > 0) { paintLabel(); return; }
+
+      clearInterval(trickle);
+      value = 100; paint();
+      if (failed) {
+        wrap.classList.add("error");
+        row.classList.add("error");
+      }
+      paintLabel(failed ? "Request failed" : "Done");
+      hideTimer = setTimeout(() => {
+        wrap.classList.remove("active");
+        row.classList.remove("show");
+      }, failed ? 1600 : 500);
+    }
+
+    return { start, end };
+  })();
+
+  // fetch() wrapper: shows progress for the call and returns { r, data }.
+  // Pass { silent: true } for background calls (e.g. polling) that should not
+  // flash the bar.
+  async function api(label, url, options = {}, { silent = false } = {}) {
+    const op = silent ? null : Progress.start(label);
+    try {
+      const r = await fetch(url, options);
+      let data = null;
+      try { data = await r.json(); } catch (_) { data = null; }
+      if (op) Progress.end(op, r.ok);
+      return { r, data };
+    } catch (e) {
+      if (op) Progress.end(op, false);
+      throw e;
+    }
+  }
+
+  // ── Window inputs ───────────────────────────────────────────────────────────
+  // datetime-local values are naive ("2026-10-12T00:00"). They are sent as-is
+  // and the server interprets them in its own timezone (DEFAULT_TIMEZONE), the
+  // same timezone it uses to decide which calendar days a window touches.
+  const pad = n => String(n).padStart(2, "0");
+  function toLocalInput(d) {
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function midnight(offsetDays) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + offsetDays);
+    return d;
+  }
+  function setWindow(from, to) {
+    document.getElementById("from-input").value = toLocalInput(from);
+    document.getElementById("to-input").value = toLocalInput(to);
+  }
+  function presetDay(daysAgo) {            // 1 = yesterday (full day), 0 = today so far
+    const from = midnight(-daysAgo);
+    const to = daysAgo === 0 ? new Date() : midnight(-daysAgo + 1);
+    setWindow(from, to);
+  }
+  function presetDays(n) {
+    setWindow(midnight(-n), midnight(0));
+  }
+  presetDay(1);   // default: yesterday, full day
 
   function escapeHtml(s) {
     const el = document.createElement("div");
@@ -739,10 +1023,11 @@
     return h > 0 ? `${h}h ${min}m` : `${min}m`;
   }
 
-  function setStatus(msg, cls = "") {
+  function setStatus(msg, cls = "", title = "") {
     const el = document.getElementById("status");
     el.textContent = msg;
     el.className = "status-tag " + cls;
+    el.title = title;
   }
 
   // ── Stress category → CSS class (colors the category label) ───────────────
@@ -757,10 +1042,11 @@
   }
 
   // ── User list ───────────────────────────────────────────────────────────────
-  async function loadUsers({ preserveActive = true } = {}) {
+  // silent: true is used by the sign-in poll so it doesn't flash the progress bar.
+  async function loadUsers({ preserveActive = true, silent = false } = {}) {
     try {
-      const r = await fetch("/api/users");
-      USERS = await r.json();
+      const { data } = await api("Loading users…", "/api/users", {}, { silent });
+      USERS = Array.isArray(data) ? data : [];
     } catch (e) {
       setStatus("Could not load users", "error");
       return;
@@ -822,6 +1108,7 @@
   function applyActiveUserUI() {
     document.getElementById("dashboard").className = "";
     document.getElementById("connect-prompt").style.display = "none";
+    LAST = null;
     setStatus("—");
 
     const user = USERS.find(u => u.id === activeUser);
@@ -849,12 +1136,20 @@
       connLabel.textContent = "Connected";
       authBtn.textContent = "Connected ✓";
       authBtn.disabled = true;
-      fetchBtn.disabled = false;
       document.getElementById("connect-prompt").style.display = "none";
       document.getElementById("empty-state").style.display = "";
       document.getElementById("empty-text").textContent = "No data loaded";
-      document.getElementById("empty-sub").textContent = "Select a date to view health metrics";
-      setStatus("Ready to fetch", "ok");
+      document.getElementById("empty-sub").textContent = "Choose a time window to view health metrics";
+
+      // /api/health looks users up by email, which is only saved once Google
+      // sign-in completes. A connected user without one can't be queried.
+      if (user.email) {
+        fetchBtn.disabled = false;
+        setStatus("Ready to fetch", "ok");
+      } else {
+        fetchBtn.disabled = true;
+        setStatus("No email on file — reconnect this account", "error");
+      }
     } else {
       pill.className = "pill disconnected";
       connLabel.textContent = "Not connected";
@@ -889,13 +1184,12 @@
     if (!label) { input.focus(); return; }
 
     try {
-      const r = await fetch("/api/users", {
+      const { r, data } = await api("Adding user…", "/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label }),
       });
-      const data = await r.json();
-      if (!r.ok) { setStatus(data.error || "Could not add user", "error"); return; }
+      if (!r.ok) { setStatus((data && data.error) || "Could not add user", "error"); return; }
 
       hideAddForm();
       activeUser = data.id;
@@ -908,7 +1202,7 @@
   async function removeUser(userId, label) {
     if (!confirm(`Remove ${label}? Their stored connection will be deleted too.`)) return;
     try {
-      await fetch(`/api/users/${userId}`, { method: "DELETE" });
+      await api("Removing user…", `/api/users/${userId}`, { method: "DELETE" });
       if (activeUser === userId) activeUser = null;
       await loadUsers({ preserveActive: true });
     } catch (e) {
@@ -921,9 +1215,8 @@
     if (!activeUser) return;
     setStatus("Starting authentication...", "loading");
     try {
-      const r = await fetch(`/api/auth/start?user=${activeUser}`);
-      const data = await r.json();
-      if (!r.ok) { setStatus(data.error || "Error starting auth", "error"); return; }
+      const { r, data } = await api("Starting sign-in…", `/api/auth/start?user=${activeUser}`);
+      if (!r.ok) { setStatus((data && data.error) || "Error starting auth", "error"); return; }
       if (data.status === "already_authenticated") {
         await loadUsers({ preserveActive: true });
         return;
@@ -941,7 +1234,7 @@
         setStatus("Waiting for sign-in...", "loading");
         const targetUser = activeUser;
         const poll = setInterval(async () => {
-          await loadUsers({ preserveActive: true });
+          await loadUsers({ preserveActive: true, silent: true });   // silent: no bar flashing every 2s
           const u = USERS.find(x => x.id === targetUser);
           if (u && u.authenticated) clearInterval(poll);
         }, 2000);
@@ -951,27 +1244,53 @@
 
   // ── Fetch data ──────────────────────────────────────────────────────────────
   async function fetchData() {
-    if (!activeUser) { setStatus("Select a user first", "error"); return; }
-    const date = document.getElementById("date-input").value;
-    if (!date) { setStatus("Select a date first", "error"); return; }
+    const user = USERS.find(u => u.id === activeUser);
+    if (!user) { setStatus("Select a user first", "error"); return; }
+    if (!user.email) { setStatus("No email on file — reconnect this account", "error"); return; }
+
+    const fromVal = document.getElementById("from-input").value;
+    const toVal   = document.getElementById("to-input").value;
+    if (!fromVal || !toVal) { setStatus("Choose both From and To", "error"); return; }
+
+    const seconds = (new Date(toVal) - new Date(fromVal)) / 1000;
+    if (!(seconds > 0))                  { setStatus("'To' must be after 'From'", "error"); return; }
+    if (seconds < MIN_WINDOW_SECONDS)    { setStatus("Window must be at least 1 minute", "error"); return; }
+    if (seconds > MAX_WINDOW_DAYS * 86400) { setStatus(`Window can be at most ${MAX_WINDOW_DAYS} days`, "error"); return; }
+
     document.getElementById("fetch-btn").disabled = true;
     setStatus("Fetching...", "loading");
     try {
-      const r = await fetch(`/api/health?date=${date}&user=${activeUser}`, {
-        headers: { "X-API-Key": API_KEY }
+      const { r, data } = await api("Fetching health data…", "/api/health", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        body: JSON.stringify({
+          user_email: user.email,
+          start_time: fromVal.length === 16 ? fromVal + ":00" : fromVal,
+          end_time:   toVal.length === 16 ? toVal + ":00" : toVal,
+        }),
       });
-      const data = await r.json();
-      if (!r.ok) { setStatus(data.error || "Error", "error"); return; }
-      render(data, date);
-      setStatus(`Loaded ${date}`, "ok");
+      if (!r.ok) {
+        const detail = data && data.errors ? Object.keys(data.errors).join(", ") : "";
+        setStatus((data && data.error) || "Error", "error", detail);
+        return;
+      }
+      render(data);
+
+      // A failed metric comes back as null + an entry in `errors`; the rest is still valid.
+      const failed = Object.keys(data.errors || {});
+      if (failed.length) {
+        setStatus(`Loaded · ${failed.length} metric${failed.length > 1 ? "s" : ""} unavailable`, "warn", failed.join(", "));
+      } else {
+        setStatus("Loaded", "ok");
+      }
     } catch (e) {
       setStatus("Network error", "error");
     } finally {
-      document.getElementById("fetch-btn").disabled = false;
+      document.getElementById("fetch-btn").disabled = !(user.email && user.authenticated);
     }
   }
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render helpers ──────────────────────────────────────────────────────────
   function set(id, val) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -984,26 +1303,101 @@
     }
   }
 
-  function render(d, date) {
-    document.getElementById("date-label").textContent = new Date(date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  function tzFmt(iso, tz, opts) {
+    return new Date(iso).toLocaleString("en-US", { timeZone: tz, ...opts });
+  }
 
-    set("v-steps",    d.steps != null ? fmt(d.steps) : null);
-    set("v-distance", d.distance_miles != null ? fmt(d.distance_miles, 2) : null);
-    set("v-vo2max",   d.vo2max != null ? fmt(d.vo2max, 1) : null);
-    set("v-swim",     d.swim_strokes != null ? fmt(d.swim_strokes) : null);
+  function windowLabel(w) {
+    const o = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+    return `${tzFmt(w.start_utc, w.timezone, o)} → ${tzFmt(w.end_utc, w.timezone, o)} (${w.timezone})`;
+  }
 
-    set("v-hr",  d.hr_avg ? fmt(d.hr_avg) : null);
-    document.getElementById("v-hr-range").textContent = d.hr_min && d.hr_max ? `min ${fmt(d.hr_min)} / max ${fmt(d.hr_max)} bpm` : "";
+  function dayLabel(dateStr) {
+    return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
+
+  // Builds a row of chips; clicking one calls onPick(index).
+  function renderChips(containerId, barId, labels, activeIndex, onPick) {
+    const holder = document.getElementById(containerId);
+    const bar = document.getElementById(barId);
+    holder.innerHTML = "";
+    if (labels.length < 2) { bar.classList.remove("show"); return; }
+    labels.forEach((label, i) => {
+      const b = document.createElement("button");
+      b.className = "chip" + (i === activeIndex ? " active" : "");
+      b.textContent = label;
+      b.addEventListener("click", () => onPick(i));
+      holder.appendChild(b);
+    });
+    bar.classList.add("show");
+  }
+
+  // ── Render: whole response ──────────────────────────────────────────────────
+  function render(data) {
+    LAST = data;
+    const w = data.windowed || {};
+
+    document.getElementById("date-label").textContent = windowLabel(data.window);
+
+    // Time-driven: computed for exactly the requested window.
+    set("v-steps",    w.steps != null ? fmt(w.steps) : null);
+    set("v-distance", w.distance_miles != null ? fmt(w.distance_miles, 2) : null);
+    set("v-swim",     w.swim_strokes != null ? fmt(w.swim_strokes) : null);
+
+    const hr = w.heart_rate || {};
+    set("v-hr", hr.avg ? fmt(hr.avg) : null);
+    document.getElementById("v-hr-range").textContent =
+      hr.min && hr.max ? `min ${fmt(hr.min)} / max ${fmt(hr.max)} bpm · ${hr.samples.toLocaleString()} samples` : "no samples in window";
+
+    // Day-driven: one entry per local day the window touches.
+    dayIdx = 0;
+    renderDay();
+
+    // Sleep sessions ending inside the window. Default to the first main session.
+    const sessions = w.sleep || [];
+    const firstMain = sessions.findIndex(s => s.main);
+    sleepIdx = firstMain >= 0 ? firstMain : 0;
+    renderSleep();
+
+    document.getElementById("empty-state").style.display = "none";
+    document.getElementById("connect-prompt").style.display = "none";
+    document.getElementById("dashboard").className = "show";
+  }
+
+  // ── Render: day-driven metrics for the selected day ─────────────────────────
+  function renderDay() {
+    const days = (LAST && LAST.daily) || [];
+    const d = days[dayIdx] || {};
+
+    renderChips("day-chips", "day-bar", days.map(x => dayLabel(x.date)), dayIdx, i => { dayIdx = i; renderDay(); });
+    document.getElementById("day-label").textContent = days.length ? `daily values · ${dayLabel(d.date)}` : "";
+
+    set("v-vo2max", d.vo2max != null ? fmt(d.vo2max, 1) : null);
     set("v-rhr",  d.resting_hr ? fmt(d.resting_hr) : null);
     set("v-hrv",  d.hrv ? fmt(d.hrv, 1) : null);
     set("v-br",   d.breathing_rate ? fmt(d.breathing_rate, 1) : null);
     set("v-spo2", d.spo2 ? fmt(d.spo2, 1) : null);
-    set("v-temp", d.skin_temp != null ? fmt(d.skin_temp, 1) : null);
+
+    // ── Skin temperature ────────────────────────────────────────────────────
+    // `skin_temp` from the API is the ABSOLUTE nightly average (~32–35 °C).
+    // This card shows the deviation from the user's 30-day baseline, which is
+    // what the Google Health app displays: skin_temp_delta = nightly − baseline.
+    const delta = d.skin_temp_delta;
+    set("v-temp", delta != null ? (delta > 0 ? "+" : "") + fmt(delta, 2) : null);
+    const tempSub = document.getElementById("v-temp-sub");
+    if (delta != null) {
+      const f = delta * 1.8;   // a temperature *difference* converts with ×1.8 only
+      tempSub.textContent = `≈ ${f > 0 ? "+" : ""}${f.toFixed(1)} °F · night ${fmt(d.skin_temp, 1)} °C · baseline ${fmt(d.skin_temp_baseline, 1)} °C`;
+    } else if (d.skin_temp != null) {
+      tempSub.textContent = `night ${fmt(d.skin_temp, 1)} °C · baseline not available`;
+    } else {
+      tempSub.textContent = "";
+    }
 
     // ── Stress ──────────────────────────────────────────────────────────────
-    // d.stress is {score, category, days_of_baseline} from /api/health, or
-    // {score: null, category: "Insufficient history" | "Unavailable", ...}
-    // when there isn't enough trailing HRV/RHR history for this user yet.
+    // d.stress is {score, category, days_of_baseline}; score is null with
+    // category "Insufficient history" / "No data" / "Unavailable" when there is
+    // nothing reliable to score yet.
     const stress = d.stress || {};
     set("v-stress", stress.score != null ? fmt(stress.score) : null);
 
@@ -1014,20 +1408,36 @@
     const subEl = document.getElementById("v-stress-sub");
     if (stress.score != null && stress.days_of_baseline != null) {
       subEl.textContent = `${stress.days_of_baseline}-day personal baseline`;
-    } else if (stress.days_of_baseline != null) {
+    } else if (stress.category === "Insufficient history" && stress.days_of_baseline != null) {
       subEl.textContent = `${stress.days_of_baseline}/5 days of history collected`;
     } else {
       subEl.textContent = "";
     }
+  }
 
-    const sl = d.sleep || {};
-    set("sleep-score", sl.sleep_score != null ? fmt(sl.sleep_score.score) : null);
-    set("sleep-score-category", sl.sleep_score != null ? sl.sleep_score.category : null);
-    set("v-inbed",  sl.minutes_in_bed ? fmtMins(sl.minutes_in_bed) : null);
-    set("v-asleep", sl.minutes_asleep ? fmtMins(sl.minutes_asleep) : null);
-    set("v-awake",  sl.minutes_awake  ? fmtMins(sl.minutes_awake)  : null);
+  // ── Render: selected sleep session ──────────────────────────────────────────
+  function renderSleep() {
+    const sessions = (LAST && LAST.windowed && LAST.windowed.sleep) || [];
+    const tz = LAST.window.timezone;
+    const s = sessions[sleepIdx] || {};
 
-    const st = sl.stages || {};
+    const timeOpts = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+    renderChips(
+      "sleep-chips", "sleep-bar",
+      sessions.map(x => `${tzFmt(x.start_time, tz, timeOpts)}${x.main ? "" : " · nap"}`),
+      sleepIdx,
+      i => { sleepIdx = i; renderSleep(); }
+    );
+    document.getElementById("sleep-label").textContent =
+      sessions.length ? `${sessions.length} session${sessions.length > 1 ? "s" : ""} ending in window` : "no sessions ending in window";
+
+    set("sleep-score", s.sleep_score != null ? fmt(s.sleep_score.score) : null);
+    set("sleep-score-category", s.sleep_score != null ? s.sleep_score.category : null);
+    set("v-inbed",  s.minutes_in_bed ? fmtMins(s.minutes_in_bed) : null);
+    set("v-asleep", s.minutes_asleep ? fmtMins(s.minutes_asleep) : null);
+    set("v-awake",  s.minutes_awake  ? fmtMins(s.minutes_awake)  : null);
+
+    const st = s.stages || {};
     const total = (st.DEEP || 0) + (st.LIGHT || 0) + (st.REM || 0) + (st.AWAKE || 0);
     const pct = v => total > 0 ? ((v / total) * 100).toFixed(1) + "%" : "0%";
 
@@ -1040,10 +1450,6 @@
     document.getElementById("mins-light").textContent = fmtMins(st.LIGHT || 0);
     document.getElementById("mins-rem").textContent   = fmtMins(st.REM   || 0);
     document.getElementById("mins-awake").textContent = fmtMins(st.AWAKE || 0);
-
-    document.getElementById("empty-state").style.display = "none";
-    document.getElementById("connect-prompt").style.display = "none";
-    document.getElementById("dashboard").className = "show";
   }
 
   // ── Init ────────────────────────────────────────────────────────────────────
