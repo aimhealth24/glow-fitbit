@@ -6,9 +6,9 @@ info:
     Public integration surface for the Health Dashboard.
 
     Fetches a user's health metrics from Google Health for a requested
-    time window. The API returns time-windowed activity, heart-rate
-    statistics, sleep sessions, daily health metrics, and a derived
-    physiological stress score.
+    time window. The API returns time-windowed activity and heart-rate
+    statistics, daily health metrics (including sleep sessions by wake
+    day), and a derived physiological stress score.
 
     Results include the requested time window, local calendar days
     covered by the window, and per-metric errors where applicable.
@@ -110,7 +110,7 @@ components:
 
     SleepSession:
       type: object
-      description: A sleep session whose end time falls within the requested window.
+      description: A sleep session attributed to a local calendar day by wake time (end_time).
       properties:
         start_time:
           type: string
@@ -184,11 +184,6 @@ components:
           allOf:
             - $ref: '#/components/schemas/HeartRate'
           nullable: true
-        sleep:
-          type: array
-          description: Sleep sessions whose end times fall within the requested window.
-          items:
-            $ref: '#/components/schemas/SleepSession'
 
     DailyHealth:
       type: object
@@ -228,6 +223,15 @@ components:
           format: float
           nullable: true
           description: Estimated VO2 max in mL/kg/min.
+        sleep:
+          type: array
+          nullable: true
+          description: |
+            Sleep sessions whose end_time falls on this local calendar day
+            (wake-day attribution). Null if the sleep fetch failed for the
+            request; an empty array means no sessions ended that day.
+          items:
+            $ref: '#/components/schemas/SleepSession'
         stress:
           $ref: '#/components/schemas/Stress'
         snapshot:
@@ -330,12 +334,12 @@ paths:
         Fetches health metrics for a registered user identified by email.
 
         Time-driven metrics, including steps, distance, swimming strokes,
-        heart-rate statistics, and sleep sessions, are computed for the
-        requested time window.
+        and heart-rate statistics, are computed for the requested time window.
 
         Day-driven metrics, including resting heart rate, HRV, breathing
-        rate, SpO2, skin temperature, VO2 max, and the derived stress score,
-        are returned for every local calendar day touched by the window.
+        rate, SpO2, skin temperature, VO2 max, sleep sessions (attributed by
+        local wake day), and the derived stress score, are returned for every
+        local calendar day touched by the window.
 
         The start_time and end_time values accept ISO 8601 timestamps or
         Unix timestamps in seconds or milliseconds. Naive ISO 8601 timestamps
@@ -416,22 +420,6 @@ paths:
                     max: 189
                     min: 40
                     samples: 38069
-                  sleep:
-                    - end_time: "2026-10-13T12:20:00Z"
-                      main: true
-                      minutes_asleep: 418
-                      minutes_awake: 6
-                      minutes_in_bed: 424
-                      sleep_score:
-                        category: Good
-                        score: 87
-                      stages:
-                        AWAKE: 6
-                        DEEP: 81
-                        LIGHT: 216
-                        REM: 121
-                      start_time: "2026-10-13T05:16:00Z"
-                      type: STAGES
                   steps: 9958
                   swim_strokes: 631
                 daily:
@@ -440,6 +428,22 @@ paths:
                     hrv: 103.6
                     resting_hr: 51.0
                     skin_temp: 32.818764845605656
+                    sleep:
+                      - end_time: "2026-10-13T12:20:00Z"
+                        main: true
+                        minutes_asleep: 418
+                        minutes_awake: 6
+                        minutes_in_bed: 424
+                        sleep_score:
+                          category: Good
+                          score: 87
+                        stages:
+                          AWAKE: 6
+                          DEEP: 81
+                          LIGHT: 216
+                          REM: 121
+                        start_time: "2026-10-13T05:16:00Z"
+                        type: STAGES
                     snapshot: saved
                     spo2: 95.8
                     stress:

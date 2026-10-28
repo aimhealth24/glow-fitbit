@@ -109,19 +109,19 @@ def db():
 # day, keyed by (user_id, period_start, period_end) = (00:00:00, 23:59:59).
 #
 # What goes in it: ONLY day-driven metrics (resting HR, HRV, breathing rate,
-# SpO2, skin temp, VO2 max) plus the stress score derived from them. These are
-# valid regardless of what time window a caller asked for, and they are what
-# the stress baseline reads back.
+# SpO2, skin temp, VO2 max, sleep sessions attributed by wake day) plus the
+# stress score derived from them. These are valid regardless of what time
+# window a caller asked for, and they are what the stress baseline reads back.
 #
 # What never goes in it: time-driven metrics (steps, distance, swim strokes,
-# heart-rate stats, sleep sessions). Those are computed for the *requested
-# window*, so a partial window (say 08:00-12:00) would otherwise be stored as
-# if it were the whole day and silently corrupt that day's row.
+# heart-rate stats). Those are computed for the *requested window*, so a
+# partial window (say 08:00-12:00) would otherwise be stored as if it were
+# the whole day and silently corrupt that day's row.
 #
 # Writes are MERGES (jsonb ||) and never overwrite a value with null, so:
 #   * a day fetched twice keeps its best-known values,
 #   * a transient Google error (value comes back null) can't erase good data,
-#   * older rows that still carry full-day fields (steps, sleep, ...) from the
+#   * older rows that still carry full-day fields (steps, ...) from the
 #     previous version of this app are left intact.
 
 def _period_bounds(date, tz_name=DEFAULT_TIMEZONE):
@@ -475,13 +475,12 @@ def _sum_bucket_field(buckets, payload_key, field):
 #     distance           Interval  -> rollUp over the window
 #     swim-lengths-data  Interval  -> rollUp over the window
 #     heart-rate         Sample    -> list, physical_time filter, stats computed here
-#     sleep              Session   -> list, interval.end_time filter (whole sessions
-#                                     whose END falls inside the window)
 #
-#   DAY-DRIVEN   (one value per local calendar day; list/reconcile by .date only)
+#   DAY-DRIVEN   (one value per local calendar day)
 #     daily-resting-heart-rate, daily-heart-rate-variability,
 #     daily-respiratory-rate, daily-oxygen-saturation,
 #     daily-sleep-temperature-derivations, daily-vo2-max
+#     + sleep sessions, attributed by local wake day (interval.end_time)
 #     + stress, derived from the daily metrics above
 #
 # Day-driven values can't be narrowed to a time window, so for a window we
@@ -497,7 +496,9 @@ DAILY_METRICS = [
     ("vo2max",         "daily-vo2-max",                       "daily_vo2_max",                       "dailyVo2Max",                     "vo2MaxMlPerMinPerKg"),
 ]
 DAILY_KEYS = [m[0] for m in DAILY_METRICS]
-TIME_DRIVEN_KEYS = ["steps", "distance", "swim", "heart_rate", "sleep"]  # error-key names
+# Sleep is day-driven (wake-day attribution) but not a scalar DAILY_METRICS row.
+DAY_DRIVEN_EXTRA_KEYS = ["sleep"]
+TIME_DRIVEN_KEYS = ["steps", "distance", "swim", "heart_rate"]  # error-key names
 
 
 def _heart_rate_stats(creds, start_dt, end_dt):
@@ -547,13 +548,38 @@ def _parse_sleep_session(point):
     }
 
 
-def _sleep_sessions(creds, start_dt, end_dt):
-    s, e = _utc_iso(start_dt), _utc_iso(end_dt)
+def _sleep_sessions_by_day(creds, dates, tz_name=DEFAULT_TIMEZONE):
+    """Sleep sessions for each local day in `dates`, keyed by wake day
+    (local calendar date of sleep.interval.end_time).
+
+    Returns {date: [session, ...]} for every date in `dates`. A day with no
+    sessions ending that day gets []. Sessions without a parseable end_time
+    are dropped.
+    """
+    tz = ZoneInfo(tz_name)
+    day_start = datetime.strptime(dates[0], "%Y-%m-%d").replace(tzinfo=tz)
+    day_end = datetime.strptime(dates[-1], "%Y-%m-%d").replace(tzinfo=tz) + timedelta(days=1)
+    s, e = _utc_iso(day_start), _utc_iso(day_end)
     filter_str = f'sleep.interval.end_time >= "{s}" AND sleep.interval.end_time < "{e}"'
     points = list_points(creds, "sleep", filter_str, page_size=25)
-    sessions = [_parse_sleep_session(p) for p in points]
-    sessions.sort(key=lambda x: x["end_time"] or "")
-    return sessions
+
+    wanted = set(dates)
+    by_day = {d: [] for d in dates}
+    for p in points:
+        session = _parse_sleep_session(p)
+        end = session.get("end_time")
+        if not end:
+            continue
+        try:
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        day = end_dt.astimezone(tz).strftime("%Y-%m-%d")
+        if day in wanted:
+            by_day[day].append(session)
+    for d in dates:
+        by_day[d].sort(key=lambda x: x["end_time"] or "")
+    return by_day
 
 
 def fetch_time_driven(creds, start_dt, end_dt):
@@ -583,7 +609,6 @@ def fetch_time_driven(creds, start_dt, end_dt):
         "distance_miles": round(mm / 1_609_344, 2) if mm is not None else None,
         "swim_strokes": int(strokes) if strokes else None,
         "heart_rate": guard("heart_rate", lambda: _heart_rate_stats(creds, start_dt, end_dt)),
-        "sleep": guard("sleep", lambda: _sleep_sessions(creds, start_dt, end_dt)),
     }
     return metrics, errors
 
@@ -621,9 +646,10 @@ def _fetch_daily_metric(creds, spec, dates):
     return {d: values.get(d) for d in dates}
 
 
-def fetch_day_driven(creds, dates):
+def fetch_day_driven(creds, dates, tz_name=DEFAULT_TIMEZONE):
     """All day-driven metrics (pre-stress) for each local date in `dates`.
-    Returns ({metric: {date: value}}, errors)."""
+    Returns ({metric: {date: value}}, errors). Sleep is included as
+    {date: [session, ...]} (or {date: None} on fetch failure)."""
     errors = {}
     out = {}
     for spec in DAILY_METRICS:
@@ -633,6 +659,11 @@ def fetch_day_driven(creds, dates):
         except GoogleHealthError as e:
             errors[f"daily.{key}"] = str(e)
             out[key] = {d: None for d in dates}
+    try:
+        out["sleep"] = _sleep_sessions_by_day(creds, dates, tz_name)
+    except GoogleHealthError as e:
+        errors["daily.sleep"] = str(e)
+        out["sleep"] = {d: None for d in dates}
     return out, errors
 
 
@@ -649,8 +680,9 @@ def fetch_all(creds, user_id, start_dt, end_dt, tz_name=DEFAULT_TIMEZONE):
 
     Returns {"window", "windowed", "daily", "errors"}:
       windowed — time-driven metrics, exact to the requested window
-      daily    — one entry per local day touched: the day-driven metrics, the
-                 derived stress score, and what happened to that day's snapshot
+      daily    — one entry per local day touched: the day-driven metrics
+                 (including sleep sessions by wake day), the derived stress
+                 score, and what happened to that day's snapshot
       errors   — per-metric failures (a failed metric is null, not a failed request)
 
     Snapshots: only the `daily` entries are persisted (see "Snapshots" above).
@@ -660,12 +692,13 @@ def fetch_all(creds, user_id, start_dt, end_dt, tz_name=DEFAULT_TIMEZONE):
     dates = _local_dates(start_dt, end_dt, tz_name)
 
     windowed, errors = fetch_time_driven(creds, start_dt, end_dt)
-    daily_map, daily_errors = fetch_day_driven(creds, dates)
+    daily_map, daily_errors = fetch_day_driven(creds, dates, tz_name)
     errors.update(daily_errors)
 
     daily = []
     for d in dates:
         metrics = {key: daily_map[key][d] for key in DAILY_KEYS}
+        sleep = daily_map["sleep"][d]
         try:
             stress = calculate_stress_score(
                 user_id, d,
@@ -678,8 +711,8 @@ def fetch_all(creds, user_id, start_dt, end_dt, tz_name=DEFAULT_TIMEZONE):
             print(f"[health_data] stress score failed for {user_id}/{d}: {e}")
             stress = {"score": None, "category": "Unavailable"}
 
-        snapshot = save_daily_snapshot(user_id, d, {**metrics, "stress": stress})
-        daily.append({"date": d, **metrics, "stress": stress, "snapshot": snapshot})
+        snapshot = save_daily_snapshot(user_id, d, {**metrics, "sleep": sleep, "stress": stress})
+        daily.append({"date": d, **metrics, "sleep": sleep, "stress": stress, "snapshot": snapshot})
 
     return {
         "window": {
@@ -1132,7 +1165,8 @@ def health_data():
     start_time / end_time: Unix timestamp (seconds or milliseconds) or ISO 8601.
     The window is [start_time, end_time) — end exclusive — truncated to whole
     seconds. Time-driven metrics are computed for exactly that window; day-driven
-    metrics are returned per local day the window touches. See fetch_all.
+    metrics (including sleep by wake day) are returned per local day the window
+    touches. See fetch_all.
     """
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
@@ -1182,7 +1216,8 @@ def health_data():
 
     # Every single metric failed (revoked token, Google outage, ...): report it
     # as a failure instead of a 200 full of nulls.
-    if len(result["errors"]) >= len(TIME_DRIVEN_KEYS) + len(DAILY_KEYS):
+    metric_count = len(TIME_DRIVEN_KEYS) + len(DAILY_KEYS) + len(DAY_DRIVEN_EXTRA_KEYS)
+    if len(result["errors"]) >= metric_count:
         return jsonify({"error": "Failed to fetch health data", "errors": result["errors"]}), 502
 
     return jsonify({

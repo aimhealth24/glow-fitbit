@@ -759,7 +759,7 @@
             </svg>
           </div>
           <div class="section-title">Sleep</div>
-          <div class="section-sub" id="sleep-label">sessions ending in window</div>
+          <div class="section-sub" id="sleep-label">sessions by wake day</div>
         </div>
         <div class="chipbar" id="sleep-bar">
           <span class="chipbar-label">Session</span>
@@ -874,7 +874,7 @@
   let activeUser = null;
   let LAST = null;       // last /api/health response
   let dayIdx = 0;        // selected entry of LAST.daily
-  let sleepIdx = 0;      // selected entry of LAST.windowed.sleep
+  let sleepIdx = 0;      // selected entry of LAST.daily[dayIdx].sleep
 
   // ── Progress tracking ───────────────────────────────────────────────────────
   // Every API call goes through api(). Each call registers an operation with
@@ -1349,15 +1349,9 @@
     document.getElementById("v-hr-range").textContent =
       hr.min && hr.max ? `min ${fmt(hr.min)} / max ${fmt(hr.max)} bpm · ${hr.samples.toLocaleString()} samples` : "no samples in window";
 
-    // Day-driven: one entry per local day the window touches.
+    // Day-driven (incl. sleep by wake day): one entry per local day touched.
     dayIdx = 0;
     renderDay();
-
-    // Sleep sessions ending inside the window. Default to the first main session.
-    const sessions = w.sleep || [];
-    const firstMain = sessions.findIndex(s => s.main);
-    sleepIdx = firstMain >= 0 ? firstMain : 0;
-    renderSleep();
 
     document.getElementById("empty-state").style.display = "none";
     document.getElementById("connect-prompt").style.display = "none";
@@ -1377,6 +1371,12 @@
     set("v-hrv",  d.hrv ? fmt(d.hrv, 1) : null);
     set("v-br",   d.breathing_rate ? fmt(d.breathing_rate, 1) : null);
     set("v-spo2", d.spo2 ? fmt(d.spo2, 1) : null);
+
+    // Sleep for this wake day. Default to the first main session.
+    const sessions = d.sleep || [];
+    const firstMain = sessions.findIndex(s => s.main);
+    sleepIdx = firstMain >= 0 ? firstMain : 0;
+    renderSleep();
 
     // ── Skin temperature ────────────────────────────────────────────────────
     // `skin_temp` from the API is the ABSOLUTE nightly average (~32–35 °C).
@@ -1415,9 +1415,11 @@
     }
   }
 
-  // ── Render: selected sleep session ──────────────────────────────────────────
+  // ── Render: selected sleep session (for the selected wake day) ──────────────
   function renderSleep() {
-    const sessions = (LAST && LAST.windowed && LAST.windowed.sleep) || [];
+    const days = (LAST && LAST.daily) || [];
+    const d = days[dayIdx] || {};
+    const sessions = d.sleep || [];
     const tz = LAST.window.timezone;
     const s = sessions[sleepIdx] || {};
 
@@ -1428,8 +1430,11 @@
       sleepIdx,
       i => { sleepIdx = i; renderSleep(); }
     );
+    const dayBit = d.date ? ` · ${dayLabel(d.date)}` : "";
     document.getElementById("sleep-label").textContent =
-      sessions.length ? `${sessions.length} session${sessions.length > 1 ? "s" : ""} ending in window` : "no sessions ending in window";
+      sessions.length
+        ? `${sessions.length} session${sessions.length > 1 ? "s" : ""} by wake day${dayBit}`
+        : `no sessions that wake day${dayBit}`;
 
     set("sleep-score", s.sleep_score != null ? fmt(s.sleep_score.score) : null);
     set("sleep-score-category", s.sleep_score != null ? s.sleep_score.category : null);
